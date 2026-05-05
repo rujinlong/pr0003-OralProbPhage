@@ -13,13 +13,14 @@ Your Name
 - [<span class="toc-section-number">5</span> Files
   written](#files-written)
 
-**Updated: 2026-05-05 21:13:20 CET.**
+**Updated: 2026-05-05 22:51:23 CET.**
 
 Defines the contract layer for the project — six SQLite tables in
 `pr0003.sqlite` that materialize the five core objects (Sample,
 TaxonProfile, CandidateMicrobe, PhageHostLink, EvidencePacket) plus a
-`data_source` registry. Schema version v0.1 (MVP). Downstream modules
-read/write these tables only.
+`data_source` registry. Schema version v0.2 (MVP + 090-r1
+evidence_packet.support_json). Downstream modules read/write these
+tables only.
 
 <details class="code-fold">
 <summary>Code</summary>
@@ -50,7 +51,7 @@ conflicted::conflicts_prefer(
 ## Schema definition
 
 The canonical schema is built here as an R list and serialized to YAML.
-The YAML file under `data/010-schema-design/schema-v0.1.yml` is the
+The YAML file under `data/010-schema-design/schema-v0.2.yml` is the
 human-readable copy that `R/utils.R::init_schema()` and
 `assert_schema()` read.
 
@@ -59,7 +60,7 @@ human-readable copy that `R/utils.R::init_schema()` and
 
 ``` r
 schema <- list(
-  schema_version = "0.1",
+  schema_version = "0.2",
   tables = list(
     data_source = list(
       pk = "source_id",
@@ -133,7 +134,8 @@ schema <- list(
         link_id              = "TEXT",
         compatibility_score  = "REAL",
         summary_text         = "TEXT",
-        generated_at         = "TEXT"
+        generated_at         = "TEXT",
+        support_json         = "TEXT"
       )
     )
   )
@@ -223,9 +225,9 @@ knitr::kable(df_tables, caption = "Contract tables in pr0003.sqlite after init")
 
 | table             | n_columns | n_rows |
 |:------------------|----------:|-------:|
-| candidate_microbe |        11 |     96 |
+| candidate_microbe |        11 |    764 |
 | data_source       |         7 |      7 |
-| evidence_packet   |         6 |    344 |
+| evidence_packet   |         7 |  18461 |
 | phage_host_link   |         7 |    770 |
 | sample            |         7 |    227 |
 | taxon_profile     |         7 |  30063 |
@@ -253,3 +255,4 @@ knitr::kable(qproj::proj_dir_info(path_target(), tz = "CET"))
 | path            | type |  size | modification_time   |
 |:----------------|:-----|------:|:--------------------|
 | schema-v0.1.yml | file | 1.32K | 2026-05-05 21:13:21 |
+| schema-v0.2.yml | file | 1.35K | 2026-05-05 22:51:23 |

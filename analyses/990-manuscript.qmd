@@ -60,7 +60,7 @@ suppressPackageStartupMessages({
 The contract layer defines five core objects plus a data-source registry
 ([Sample, TaxonProfile, CandidateMicrobe, PhageHostLink, EvidencePacket]).
 Schema version: `r schema_version()`; canonical YAML lives at
-`analyses/data/010-schema-design/schema-v0.1.yml`.
+`analyses/data/010-schema-design/schema-v0.2.yml`.
 
 ```{r}
 #| label: schema-summary
@@ -71,7 +71,7 @@ df_schema_summary <- tibble::tibble(
   pk        = vapply(schema$tables, function(t) t$pk %||% "", character(1)),
   n_columns = vapply(schema$tables, function(t) length(t$columns), integer(1))
 )
-knitr::kable(df_schema_summary, caption = "Schema v0.1 — six contract tables")
+knitr::kable(df_schema_summary, caption = sprintf("Schema v%s — six contract tables", schema_version()))
 ```
 
 # Sources used in the MVP

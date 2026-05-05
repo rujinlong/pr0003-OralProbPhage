@@ -29,8 +29,8 @@ Your Name
 
 The contract layer defines five core objects plus a data-source registry
 (\[Sample, TaxonProfile, CandidateMicrobe, PhageHostLink,
-EvidencePacket\]). Schema version: 0.1; canonical YAML lives at
-`analyses/data/010-schema-design/schema-v0.1.yml`.
+EvidencePacket\]). Schema version: 0.2; canonical YAML lives at
+`analyses/data/010-schema-design/schema-v0.2.yml`.
 
 | table             | pk           | n_columns |
 |:------------------|:-------------|----------:|
@@ -39,9 +39,9 @@ EvidencePacket\]). Schema version: 0.1; canonical YAML lives at
 | taxon_profile     | profile_id   |         7 |
 | candidate_microbe | candidate_id |        11 |
 | phage_host_link   | link_id      |         7 |
-| evidence_packet   | packet_id    |         6 |
+| evidence_packet   | packet_id    |         7 |
 
-Schema v0.1 — six contract tables
+Schema v0.2 — six contract tables
 
 # Sources used in the MVP
 
@@ -62,9 +62,9 @@ Registered MVP data sources
 | data_source       |     7 |
 | sample            |   227 |
 | taxon_profile     | 30063 |
-| candidate_microbe |    96 |
+| candidate_microbe |   764 |
 | phage_host_link   |   770 |
-| evidence_packet   |   344 |
+| evidence_packet   | 18461 |
 
 Contract-layer populations after MVP
 

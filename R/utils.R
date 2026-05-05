@@ -49,10 +49,10 @@ read_table_db <- function(con, name) {
 
 #' Path to the canonical project schema YAML
 #'
-#' MVP version 0.1 lives under the 010 module's data target dir. Other helpers
+#' MVP version 0.2 lives under the 010 module's data target dir. Other helpers
 #' default to this path when no explicit schema is given.
-#' @param version Schema version string (default "0.1")
-schema_path <- function(version = "0.1") {
+#' @param version Schema version string (default "0.2")
+schema_path <- function(version = "0.2") {
   here::here("data", "010-schema-design",
              paste0("schema-v", version, ".yml"))
 }
