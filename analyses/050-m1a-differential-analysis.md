@@ -25,10 +25,12 @@ Your Name
   write to the contract
   layer](#combine-all-methods--write-to-the-contract-layer)
 - [<span class="toc-section-number">12</span> Persist](#persist)
-- [<span class="toc-section-number">13</span> Files
+- [<span class="toc-section-number">13</span> Cross-cohort meta-analysis
+  (050-r2)](#cross-cohort-meta-analysis-050-r2)
+- [<span class="toc-section-number">14</span> Files
   written](#files-written)
 
-**Updated: 2026-05-05 21:13:21 CET.**
+**Updated: 2026-05-05 22:37:53 CET.**
 
 Multi-method, single-cohort differential abundance analysis on the Geng
 PRJDB11203 saliva sub-cohort. The MVP baseline (Wilcoxon rank-sum +
@@ -870,6 +872,367 @@ write_csv(df_deseq,          path_target("deseq2_full_results.csv"))
 write_csv(df_all_methods,    path_target("candidate_microbe.csv"))
 write_csv(df_agree,          path_target("method_agreement.csv"))
 write_csv(df_consensus,      path_target("consensus_species.csv"))
+```
+
+</details>
+
+## Cross-cohort meta-analysis (050-r2)
+
+Combine per-cohort Wilcoxon statistics across the six Geng 2024
+sub-cohorts via Stouffer’s Z (sqrt-n weights, sign tracking on log2FC)
+and a DerSimonian–Laird random-effects pool of rank-biserial
+correlations. Outputs two new `candidate_microbe` method tags:
+`meta_stouffer` and `meta_random`, with `n_cohorts >= 2`.
+
+<details class="code-fold">
+<summary>Code</summary>
+
+``` r
+con <- load_db()
+df_sample_all <- read_table_db(con, "sample") |>
+  dplyr::filter(grepl("^geng2024_", source_id),
+                disease_status %in% c("periodontitis", "healthy"))
+df_profile_all <- read_table_db(con, "taxon_profile") |>
+  dplyr::filter(sample_id %in% df_sample_all$sample_id,
+                taxon_kind == "bacterium")
+close_db(con)
+
+cohorts_meta <- sort(unique(df_sample_all$source_id))
+cat("Meta-analysis cohorts:", length(cohorts_meta), "\n")
+```
+
+</details>
+
+    Meta-analysis cohorts: 6 
+
+<details class="code-fold">
+<summary>Code</summary>
+
+``` r
+per_cohort_wilcox <- function(source_id_x) {
+  df_s <- df_sample_all |> dplyr::filter(source_id == source_id_x)
+  df_p <- df_profile_all |> dplyr::filter(sample_id %in% df_s$sample_id)
+  df_w <- df_p |>
+    dplyr::select(sample_id, taxon_id, taxon_name, abundance) |>
+    tidyr::pivot_wider(id_cols = c(taxon_id, taxon_name),
+                       names_from = sample_id, values_from = abundance,
+                       values_fill = 0)
+  ids_case_x <- df_s$sample_id[df_s$disease_status == "periodontitis"]
+  ids_ctrl_x <- df_s$sample_id[df_s$disease_status == "healthy"]
+  if (length(ids_case_x) < 5 || length(ids_ctrl_x) < 5) return(NULL)
+  mat_x <- as.matrix(df_w[, c(ids_case_x, ids_ctrl_x)])
+  rownames(mat_x) <- df_w$taxon_id
+  prev_x <- rowMeans(mat_x > 0)
+  keep_x <- prev_x >= 0.10
+  if (sum(keep_x) == 0) return(NULL)
+  mat_case <- mat_x[keep_x, ids_case_x, drop = FALSE]
+  mat_ctrl <- mat_x[keep_x, ids_ctrl_x, drop = FALSE]
+  n1 <- length(ids_case_x); n2 <- length(ids_ctrl_x); n_total <- n1 + n2
+  taxa_x <- rownames(mat_case)
+  out <- purrr::map_dfr(seq_along(taxa_x), function(i) {
+    a <- mat_case[i, ]; b <- mat_ctrl[i, ]
+    if (length(unique(c(a, b))) < 2) {
+      return(tibble::tibble(taxon_id = taxa_x[i],
+                            p_value = NA_real_, U = NA_real_,
+                            r = NA_real_, var_r = NA_real_,
+                            log2fc = 0, mean_case = mean(a),
+                            mean_ctrl = mean(b)))
+    }
+    wt <- suppressWarnings(stats::wilcox.test(a, b, exact = FALSE))
+    U <- unname(wt$statistic)
+    r <- 2 * U / (n1 * n2) - 1        # positive r = case-enriched
+    var_r <- (1 - r^2)^2 / max(n_total - 1, 1)
+    if (var_r < 1e-8) var_r <- 1e-8
+    tibble::tibble(taxon_id = taxa_x[i],
+                   p_value = wt$p.value, U = U,
+                   r = r, var_r = var_r,
+                   log2fc = log2((mean(a) + 1e-6) / (mean(b) + 1e-6)),
+                   mean_case = mean(a), mean_ctrl = mean(b))
+  })
+  out |>
+    dplyr::left_join(df_w |> dplyr::select(taxon_id, taxon_name),
+                     by = "taxon_id") |>
+    dplyr::mutate(source_id = source_id_x, n_case = n1, n_ctrl = n2,
+                  n_total = n_total) |>
+    dplyr::filter(!is.na(p_value))
+}
+
+df_per_cohort <- purrr::map_dfr(cohorts_meta, per_cohort_wilcox)
+
+df_per_cohort |>
+  dplyr::count(source_id, name = "n_species_tested") |>
+  knitr::kable(caption = "Per-cohort Wilcoxon: species tested (prevalence >= 10%)")
+```
+
+</details>
+
+| source_id            | n_species_tested |
+|:---------------------|-----------------:|
+| geng2024_PRJDB11203  |              136 |
+| geng2024_PRJNA230363 |              280 |
+| geng2024_PRJNA396840 |              210 |
+| geng2024_PRJNA678453 |              293 |
+| geng2024_PRJNA717815 |              283 |
+| geng2024_PRJNA932553 |              333 |
+
+Per-cohort Wilcoxon: species tested (prevalence \>= 10%)
+
+<details class="code-fold">
+<summary>Code</summary>
+
+``` r
+df_per_cohort_clean <- df_per_cohort |>
+  dplyr::filter(is.finite(p_value), p_value > 0, p_value < 1,
+                is.finite(r), is.finite(var_r))
+
+df_grouped <- df_per_cohort_clean |>
+  dplyr::group_by(taxon_id) |>
+  dplyr::summarise(
+    n_cohorts  = dplyr::n_distinct(source_id),
+    taxon_name = dplyr::first(stats::na.omit(taxon_name)),
+    .groups = "drop"
+  ) |>
+  dplyr::filter(n_cohorts >= 2)
+
+cat("Species testable in >= 2 cohorts:", nrow(df_grouped), "\n")
+```
+
+</details>
+
+    Species testable in >= 2 cohorts: 334 
+
+<details class="code-fold">
+<summary>Code</summary>
+
+``` r
+stouffer_one <- function(df_one) {
+  pv  <- df_one$p_value
+  fc  <- df_one$log2fc
+  n   <- df_one$n_total
+  z_two <- stats::qnorm(1 - pv / 2)
+  z_two[!is.finite(z_two)] <- 0
+  z_signed <- z_two * ifelse(fc >= 0, 1, -1)
+  w <- sqrt(n)
+  z_pool <- sum(w * z_signed) / sqrt(sum(w^2))
+  p_pool <- 2 * stats::pnorm(-abs(z_pool))
+  tibble::tibble(z_pool = z_pool, p_value = p_pool,
+                 effect_size = mean(fc),
+                 direction   = ifelse(z_pool >= 0, "disease_enriched",
+                                                   "health_enriched"))
+}
+
+df_meta_stouffer <- df_per_cohort_clean |>
+  dplyr::semi_join(df_grouped, by = "taxon_id") |>
+  dplyr::group_by(taxon_id) |>
+  dplyr::group_modify(~ stouffer_one(.x)) |>
+  dplyr::ungroup() |>
+  dplyr::left_join(df_grouped, by = "taxon_id") |>
+  dplyr::mutate(q_value = stats::p.adjust(p_value, method = "BH"))
+
+cat("Stouffer meta: ", nrow(df_meta_stouffer),
+    " species | q<0.1: ", sum(df_meta_stouffer$q_value < 0.1, na.rm = TRUE),
+    "\n", sep = "")
+```
+
+</details>
+
+    Stouffer meta: 334 species | q<0.1: 141
+
+<details class="code-fold">
+<summary>Code</summary>
+
+``` r
+has_metafor <- requireNamespace("metafor", quietly = TRUE)
+random_one <- function(df_one) {
+  yi <- df_one$r; vi <- df_one$var_r
+  if (has_metafor) {
+    fit <- try(metafor::rma(yi = yi, vi = vi, method = "DL"), silent = TRUE)
+    if (!inherits(fit, "try-error")) {
+      return(tibble::tibble(effect_size = unname(fit$b[1, 1]),
+                            se          = fit$se,
+                            p_value     = fit$pval,
+                            tau2        = fit$tau2,
+                            I2          = fit$I2))
+    }
+  }
+  # DL fallback: IVW
+  w <- 1 / vi
+  est <- sum(w * yi) / sum(w)
+  se  <- sqrt(1 / sum(w))
+  z   <- est / se
+  tibble::tibble(effect_size = est, se = se,
+                 p_value     = 2 * stats::pnorm(-abs(z)),
+                 tau2 = NA_real_, I2 = NA_real_)
+}
+
+df_meta_random <- df_per_cohort_clean |>
+  dplyr::semi_join(df_grouped, by = "taxon_id") |>
+  dplyr::group_by(taxon_id) |>
+  dplyr::group_modify(~ random_one(.x)) |>
+  dplyr::ungroup() |>
+  dplyr::left_join(df_grouped, by = "taxon_id") |>
+  dplyr::mutate(q_value   = stats::p.adjust(p_value, method = "BH"),
+                direction = ifelse(effect_size >= 0, "disease_enriched",
+                                                     "health_enriched"))
+
+cat("Random-effects meta (",
+    ifelse(has_metafor, "DL via metafor", "DL fallback: IVW"),
+    "): ", nrow(df_meta_random),
+    " species | q<0.1: ", sum(df_meta_random$q_value < 0.1, na.rm = TRUE),
+    "\n", sep = "")
+```
+
+</details>
+
+    Random-effects meta (DL via metafor): 334 species | q<0.1: 119
+
+<details class="code-fold">
+<summary>Code</summary>
+
+``` r
+df_cand_meta_stouffer <- df_meta_stouffer |>
+  dplyr::transmute(taxon_id, taxon_name, direction,
+                   effect_size, p_value, q_value, n_cohorts) |>
+  dplyr::mutate(
+    phenotype      = "periodontitis",
+    method         = "meta_stouffer",
+    schema_version = ver,
+    candidate_id   = paste0(
+      "CAND_",
+      vapply(paste(taxon_id, phenotype, method, sep = "|"),
+             function(s) substr(digest::digest(s, algo = "xxhash64"), 1, 12),
+             character(1))
+    )
+  ) |>
+  dplyr::select(candidate_id, taxon_id, taxon_name, phenotype, direction,
+                effect_size, p_value, q_value, n_cohorts, method,
+                schema_version)
+
+df_cand_meta_random <- df_meta_random |>
+  dplyr::transmute(taxon_id, taxon_name, direction,
+                   effect_size, p_value, q_value, n_cohorts) |>
+  dplyr::mutate(
+    phenotype      = "periodontitis",
+    method         = "meta_random",
+    schema_version = ver,
+    candidate_id   = paste0(
+      "CAND_",
+      vapply(paste(taxon_id, phenotype, method, sep = "|"),
+             function(s) substr(digest::digest(s, algo = "xxhash64"), 1, 12),
+             character(1))
+    )
+  ) |>
+  dplyr::select(candidate_id, taxon_id, taxon_name, phenotype, direction,
+                effect_size, p_value, q_value, n_cohorts, method,
+                schema_version)
+
+df_cand_meta <- dplyr::bind_rows(df_cand_meta_stouffer, df_cand_meta_random)
+stopifnot(!any(duplicated(df_cand_meta$candidate_id)))
+
+con <- load_db()
+DBI::dbExecute(con, "DELETE FROM candidate_microbe WHERE method LIKE 'meta_%'")
+```
+
+</details>
+
+    [1] 668
+
+<details class="code-fold">
+<summary>Code</summary>
+
+``` r
+DBI::dbWriteTable(con, "candidate_microbe", df_cand_meta,
+                  append = TRUE, row.names = FALSE)
+df_meta_summary <- DBI::dbGetQuery(con,
+  "SELECT method, COUNT(*) n, MIN(n_cohorts) min_c, MAX(n_cohorts) max_c
+     FROM candidate_microbe GROUP BY method ORDER BY method")
+close_db(con)
+
+knitr::kable(df_meta_summary,
+             caption = "candidate_microbe by method after meta merge")
+```
+
+</details>
+
+| method        |   n | min_c | max_c |
+|:--------------|----:|------:|------:|
+| ancombc       |  14 |     1 |     1 |
+| consensus     |  12 |     1 |     1 |
+| deseq2        |  27 |     1 |     1 |
+| maaslin2      |  13 |     1 |     1 |
+| meta_random   | 334 |     2 |     6 |
+| meta_stouffer | 334 |     2 |     6 |
+| wilcoxon      |  30 |     1 |     1 |
+
+candidate_microbe by method after meta merge
+
+<details class="code-fold">
+<summary>Code</summary>
+
+``` r
+df_meta_stouffer |>
+  dplyr::arrange(q_value) |>
+  head(10) |>
+  dplyr::select(taxon_id, taxon_name, n_cohorts, direction,
+                z_pool, p_value, q_value) |>
+  knitr::kable(digits = 4,
+               caption = "Top 10 species by Stouffer meta q_value")
+```
+
+</details>
+
+| taxon_id | taxon_name | n_cohorts | direction | z_pool | p_value | q_value |
+|:---|:---|---:|:---|---:|---:|---:|
+| STR_Filifactor_alocis | Filifactor_alocis | 6 | disease_enriched | 7.9548 | 0 | 0 |
+| STR_Porphyromonas_gingivalis | Porphyromonas_gingivalis | 6 | disease_enriched | 7.5043 | 0 | 0 |
+| STR_Eubacterium_nodatum | Eubacterium_nodatum | 6 | disease_enriched | 7.4103 | 0 | 0 |
+| STR_Treponema_denticola | Treponema_denticola | 6 | disease_enriched | 7.4217 | 0 | 0 |
+| STR_Prevotella_intermedia | Prevotella_intermedia | 6 | disease_enriched | 7.3400 | 0 | 0 |
+| STR_GGB4333_SGB5935 | GGB4333_SGB5935 | 6 | disease_enriched | 7.2086 | 0 | 0 |
+| STR_Tannerella_forsythia | Tannerella_forsythia | 6 | disease_enriched | 7.1770 | 0 | 0 |
+| STR_GGB10852_SGB17523 | GGB10852_SGB17523 | 6 | disease_enriched | 7.0037 | 0 | 0 |
+| STR_Eubacterium_saphenum | Eubacterium_saphenum | 5 | disease_enriched | 6.7626 | 0 | 0 |
+| STR_Porphyromonas_endodontalis | Porphyromonas_endodontalis | 6 | disease_enriched | 6.5941 | 0 | 0 |
+
+Top 10 species by Stouffer meta q_value
+
+<details class="code-fold">
+<summary>Code</summary>
+
+``` r
+df_meta_random |>
+  dplyr::arrange(q_value) |>
+  head(10) |>
+  dplyr::select(taxon_id, taxon_name, n_cohorts, direction,
+                effect_size, se, p_value, q_value) |>
+  knitr::kable(digits = 4,
+               caption = "Top 10 species by random-effects meta q_value")
+```
+
+</details>
+
+| taxon_id | taxon_name | n_cohorts | direction | effect_size | se | p_value | q_value |
+|:---|:---|---:|:---|---:|---:|---:|---:|
+| STR_Eubacterium_nodatum | Eubacterium_nodatum | 6 | disease_enriched | 0.5526 | 0.0470 | 0 | 0 |
+| STR_Filifactor_alocis | Filifactor_alocis | 6 | disease_enriched | 0.6232 | 0.0548 | 0 | 0 |
+| STR_Treponema_denticola | Treponema_denticola | 6 | disease_enriched | 0.5434 | 0.0477 | 0 | 0 |
+| STR_Porphyromonas_gingivalis | Porphyromonas_gingivalis | 6 | disease_enriched | 0.5562 | 0.0540 | 0 | 0 |
+| STR_Porphyromonas_endodontalis | Porphyromonas_endodontalis | 6 | disease_enriched | 0.5623 | 0.0581 | 0 | 0 |
+| STR_Prevotella_koreensis | Prevotella_koreensis | 4 | disease_enriched | 0.5638 | 0.0625 | 0 | 0 |
+| STR_Fretibacterium_fastidiosum | Fretibacterium_fastidiosum | 6 | disease_enriched | 0.4618 | 0.0531 | 0 | 0 |
+| STR_Treponema_SGB69443 | Treponema_SGB69443 | 5 | disease_enriched | 0.4576 | 0.0560 | 0 | 0 |
+| STR_GGB4333_SGB5935 | GGB4333_SGB5935 | 6 | disease_enriched | 0.5268 | 0.0681 | 0 | 0 |
+| STR_Treponema_SGB3604 | Treponema_SGB3604 | 5 | disease_enriched | 0.4498 | 0.0598 | 0 | 0 |
+
+Top 10 species by random-effects meta q_value
+
+<details class="code-fold">
+<summary>Code</summary>
+
+``` r
+write_csv(df_per_cohort,    path_target("meta_per_cohort_wilcoxon.csv"))
+write_csv(df_meta_stouffer, path_target("meta_stouffer.csv"))
+write_csv(df_meta_random,   path_target("meta_random.csv"))
 ```
 
 </details>
