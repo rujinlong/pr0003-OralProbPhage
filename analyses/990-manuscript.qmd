@@ -1,0 +1,93 @@
+---
+title: "990-manuscript"
+date: today
+params:
+  name: "990-manuscript"
+---
+
+**Updated: `r format(Sys.time(), '%Y-%m-%d %H:%M:%S', tz = 'CET')` CET.**
+
+```{r}
+#| label: params
+#| eval: !expr interactive()
+#| include: false
+params <- list(name = "990-manuscript")
+```
+
+```{r}
+#| label: setup
+#| include: false
+#| message: false
+#| warning: false
+#| cache: false
+wd <- "analyses"
+if (basename(getwd()) != wd) {
+    setwd(here::here(wd))
+}
+here::i_am(paste0(params$name, ".qmd"), uuid = "f99d86ed-c1dd-4939-b367-3570796b4648")
+qproj::proj_create_dir_target(params$name, clean = FALSE)
+
+# convenience helpers
+path_target <- qproj::proj_path_target(params$name)
+path_source <- qproj::proj_path_source(params$name)
+path_raw <- path_source("00-raw")
+path_resource <- here::here(path_raw, "d00-resource")
+path_data <- here::here(path_raw, paste0("d", params$name))
+dir.create(path_raw, recursive = TRUE, showWarnings = FALSE)
+dir.create(path_data, recursive = TRUE, showWarnings = FALSE)
+dir.create(path_resource, recursive = TRUE, showWarnings = FALSE)
+```
+
+```{r}
+#| label: packages
+#| message: false
+#| warning: false
+#| cache: false
+suppressPackageStartupMessages({
+  library(here)
+  library(conflicted)
+  library(tidyverse)
+  library(data.table)
+  devtools::load_all()
+})
+# Resolve common dplyr / data.table / stats name clashes up front.
+# Add more `conflicts_prefer()` calls below as needed.
+conflicted::conflicts_prefer(
+  dplyr::filter,
+  dplyr::lag,
+  dplyr::first,
+  dplyr::last,
+  dplyr::between,
+  .quiet = TRUE
+)
+```
+
+## Tasks
+
+This section is designated for your workflow implementation. **Please write all your analysis and processing code here.**
+
+Maintaining your code within this section ensures a clean project structure and facilitates reproducibility. We recommend organizing your workflow into modular tasks—such as data cleaning, analysis, and visualization—using distinct code chunks.
+
+::: {.callout-note}
+## Example structure
+
+This is an example structure to get you started. You can modify it as per your needs.
+:::
+
+### Task 1: Data import
+
+```{r}
+#| label: data-import
+#| cache: true
+
+# Your data import code here
+```
+
+## Files written
+
+These files have been written to the target directory, `r paste0("data/", params$name)`:
+
+```{r}
+#| label: list-files-target
+knitr::kable(qproj::proj_dir_info(path_target(), tz = "CET"))
+```
