@@ -1,0 +1,12 @@
+Package: OralProbPhage
+Title: Analysis Project
+Version: 0.1.0
+Authors@R: 
+    c(person(given = "Jo", family = "Doe", email = "jodoe@dom.ain",
+      role = c("aut", "cre")))
+Maintainer: {{ Maintainer }}
+Description: Oral Probiotic Phage Therapy Analysis
+License: {{ License }}
+URL: {{ URL }}
+BugReports: {{ BugReports }}
+Encoding: UTF-8
