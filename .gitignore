@@ -1,4 +1,32 @@
-.Rproj.user
+# Quarto output
+*.html
+*.pdf
+*.md
+!*.qmd
+!README.md
+*_files/
+*.knit.md
+
+# Quarto cache
+*_cache/
+.quarto/
+
+# Backup and temp
+*.bak
+*.backup
+*.log
+*.tmp
+*~
 .Rhistory
 .RData
-.Ruserdata
+.DS_Store
+
+# Data (qproj auto-generated output area)
+analyses/data/*
+!analyses/data/README.md
+analyses/*_cache
+
+# Project-level SQLite (derived data)
+*.sqlite
+
+analyses/tmp/
