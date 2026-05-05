@@ -34,7 +34,15 @@ to land in (0, 1):
 **Ripple ladder**:
 
 - `100-r1`: real compatibility scoring — combine direction, lifestyle,
-  host-prediction confidence, and effect-size magnitude (this version).
+  host-prediction confidence, and effect-size magnitude.
+- `100-r1.1` (this version): consume the genus-fallback mapping
+  (`090/mapping_with_fallback.tsv`) when present. Each packet inherits a
+  `match_level` ('species' or 'genus'); genus-level matches have their
+  `compatibility_score` multiplied by `0.6` to reflect the lower
+  taxonomic resolution. The factor and a per-packet `match_level` are
+  recorded in a JSON blob persisted to a new `support_json` column on
+  `evidence_packet` (added at runtime with `ALTER TABLE ... ADD COLUMN`
+  if missing — schema-v0.1.yml is unchanged).
 - `100-r2`: therapeutic ranking — boost packets where the host is a known
   K12/M18-suppressed taxon or a halitosis-VSC producer; add CRISPR spacer
   and receptor evidence as additional score terms.
@@ -95,9 +103,21 @@ the lifestyle/integrase signal that the score depends on).
 
 ```{r}
 #| label: pull
-path_in <- here::here("data", "090-m2a-mapping", "mapping_prefix.csv")
-stopifnot(file.exists(path_in))
-df_pairs <- readr::read_csv(path_in, show_col_types = FALSE)
+path_fallback <- here::here("data", "090-m2a-mapping",
+                            "mapping_with_fallback.tsv")
+path_legacy   <- here::here("data", "090-m2a-mapping", "mapping_prefix.csv")
+
+if (file.exists(path_fallback)) {
+  df_pairs <- readr::read_tsv(path_fallback, show_col_types = FALSE)
+  cat("Using 090-r1 mapping_with_fallback.tsv (with match_level)\n")
+} else {
+  stopifnot(file.exists(path_legacy))
+  df_pairs <- readr::read_csv(path_legacy, show_col_types = FALSE) |>
+    dplyr::mutate(match_level = "species")
+  cat("Using legacy mapping_prefix.csv; all rows tagged match_level='species'\n")
+}
+
+stopifnot("match_level" %in% colnames(df_pairs))
 
 con <- load_db()
 df_candidate <- read_table_db(con, "candidate_microbe")
@@ -105,6 +125,8 @@ df_link      <- read_table_db(con, "phage_host_link")
 close_db(con)
 
 cat("Pairs to package:", nrow(df_pairs),
+    "| species:", sum(df_pairs$match_level == "species"),
+    " genus:",    sum(df_pairs$match_level == "genus"),
     "| candidate_microbe rows:", nrow(df_candidate),
     "| phage_host_link rows:", nrow(df_link), "\n")
 ```
@@ -217,23 +239,51 @@ effect_size_term <- function(effect_size) {
   out
 }
 
+match_level_factor <- function(match_level) {
+  # 1.0 for species-level matches; 0.6 for genus-level fallback matches.
+  # The 0.6 figure is a heuristic deliberately set well below 1.0 to ensure
+  # genus-level packets always rank below an otherwise-equivalent species
+  # packet, but stay above ~0.5 so a strong-signal genus match (e.g. high
+  # CAT confidence + disease_enriched + lytic) can still surface above
+  # mediocre species matches. Tune in 100-r2.
+  out <- dplyr::if_else(match_level == "genus", 0.6, 1.0)
+  bad <- !match_level %in% c("species", "genus")
+  if (any(bad)) {
+    warning(sprintf("match_level_factor: %d packet(s) had unrecognized match_level; defaulted to 1.0",
+                    sum(bad)))
+    out[bad] <- 1.0
+  }
+  out
+}
+
 df_pairs_enriched <- df_pairs |>
   dplyr::left_join(df_support, by = "link_id") |>
   dplyr::mutate(
-    term_direction  = direction_term(direction),
-    term_lifestyle  = lifestyle_term(integrase),
-    term_confidence = confidence_term(confidence),
-    term_effect     = effect_size_term(effect_size),
-    raw_score       = term_direction + term_lifestyle + term_confidence + term_effect,
-    compatibility_score = plogis(raw_score)
+    term_direction      = direction_term(direction),
+    term_lifestyle      = lifestyle_term(integrase),
+    term_confidence     = confidence_term(confidence),
+    term_effect         = effect_size_term(effect_size),
+    raw_score           = term_direction + term_lifestyle +
+                          term_confidence + term_effect,
+    species_score       = plogis(raw_score),
+    match_level_factor  = match_level_factor(match_level),
+    compatibility_score = species_score * match_level_factor
   )
 
 stopifnot(all(is.finite(df_pairs_enriched$compatibility_score)))
 stopifnot(all(df_pairs_enriched$compatibility_score > 0 &
               df_pairs_enriched$compatibility_score < 1))
 
-cat("Compatibility-score summary:\n")
+cat("Compatibility-score summary (post-match_level adjustment):\n")
 print(summary(df_pairs_enriched$compatibility_score))
+cat("\nBy match_level:\n")
+df_pairs_enriched |>
+  dplyr::group_by(match_level) |>
+  dplyr::summarise(n = dplyr::n(),
+                   mean_score = mean(compatibility_score),
+                   median_score = median(compatibility_score),
+                   .groups = "drop") |>
+  print()
 ```
 
 ## Build packets
@@ -247,6 +297,30 @@ key drivers (direction, host genus, CAT confidence, lifestyle).
 #| label: build
 generated_at <- format(Sys.time(), "%Y-%m-%dT%H:%M:%S%z")
 
+build_support_json <- function(match_level, match_level_factor,
+                               species_score, integrase_label,
+                               term_direction, term_lifestyle,
+                               term_confidence, term_effect) {
+  # One row at a time; jsonlite::toJSON over scalars returns 1-element arrays,
+  # so unbox each scalar.
+  vapply(seq_along(match_level), function(i) {
+    jsonlite::toJSON(
+      list(
+        match_level         = jsonlite::unbox(match_level[i]),
+        match_level_factor  = jsonlite::unbox(match_level_factor[i]),
+        species_score       = jsonlite::unbox(round(species_score[i], 6)),
+        lifestyle           = jsonlite::unbox(integrase_label[i]),
+        term_direction      = jsonlite::unbox(round(term_direction[i],  4)),
+        term_lifestyle      = jsonlite::unbox(round(term_lifestyle[i],  4)),
+        term_confidence     = jsonlite::unbox(round(term_confidence[i], 4)),
+        term_effect         = jsonlite::unbox(round(term_effect[i],     4))
+      ),
+      auto_unbox = FALSE,
+      na = "null"
+    ) |> as.character()
+  }, character(1))
+}
+
 df_evidence_packet <- df_pairs_enriched |>
   dplyr::mutate(
     lifestyle_label = dplyr::case_when(
@@ -256,8 +330,9 @@ df_evidence_packet <- df_pairs_enriched |>
       TRUE               ~ "unknown"
     ),
     summary_text = sprintf(
-      "score=%.2f - %s (%s in %s, q=%.3g, log2FC=%.2f) <-> phage %s (CAT confidence %.2f, %s) on host %s",
+      "score=%.2f [%s] - %s (%s in %s, q=%.3g, log2FC=%.2f) <-> phage %s (CAT confidence %.2f, %s) on host %s",
       compatibility_score,
+      match_level,
       taxon_name,
       direction,
       phenotype,
@@ -267,6 +342,16 @@ df_evidence_packet <- df_pairs_enriched |>
       confidence,
       lifestyle_label,
       sub("^STR_", "", host_taxon_id)
+    ),
+    support_json = build_support_json(
+      match_level         = match_level,
+      match_level_factor  = match_level_factor,
+      species_score       = species_score,
+      integrase_label     = lifestyle_label,
+      term_direction      = term_direction,
+      term_lifestyle      = term_lifestyle,
+      term_confidence     = term_confidence,
+      term_effect         = term_effect
     ),
     generated_at = generated_at,
     packet_id = paste0(
@@ -278,7 +363,7 @@ df_evidence_packet <- df_pairs_enriched |>
   ) |>
   dplyr::distinct(packet_id, .keep_all = TRUE) |>
   dplyr::select(packet_id, candidate_id, link_id, compatibility_score,
-                summary_text, generated_at)
+                summary_text, generated_at, support_json)
 
 cat("evidence_packet rows:", nrow(df_evidence_packet), "\n")
 df_evidence_packet |> head(8) |>
@@ -292,7 +377,7 @@ df_evidence_packet |> head(8) |>
 ```{r}
 #| label: score-dist
 #| fig-width: 6.5
-#| fig-height: 3.5
+#| fig-height: 4.5
 df_score_long <- df_pairs_enriched |>
   dplyr::transmute(
     packet_hash = paste(candidate_id, link_id, sep = "|"),
@@ -300,8 +385,10 @@ df_score_long <- df_pairs_enriched |>
     integrase,
     confidence,
     effect_size,
+    match_level,
     term_direction, term_lifestyle, term_confidence, term_effect,
     raw_score,
+    species_score,
     compatibility_score
   )
 
@@ -310,16 +397,19 @@ p_score <- ggplot(df_score_long,
   geom_histogram(bins = 40, alpha = 0.85, position = "stack") +
   scale_fill_manual(values = c(disease_enriched = "#c84a4a",
                                health_enriched  = "#3f86b8")) +
+  facet_wrap(~ match_level, ncol = 1, scales = "free_y",
+             labeller = labeller(match_level = c(species = "match_level: species (×1.0)",
+                                                 genus   = "match_level: genus (×0.6)"))) +
   labs(x = "compatibility_score",
        y = "packets",
-       title = "Distribution of compatibility scores",
+       title = "Distribution of compatibility scores by match_level",
        subtitle = sprintf("n = %d packets across %d candidates and %d phages",
                           nrow(df_score_long),
                           dplyr::n_distinct(df_pairs_enriched$candidate_id),
                           dplyr::n_distinct(df_pairs_enriched$vOTU_id))) +
   theme_minimal(base_size = 11)
 ggsave(path_target("fig_score_distribution.png"),
-       p_score, width = 6.5, height = 3.5, dpi = 150)
+       p_score, width = 6.5, height = 4.5, dpi = 150)
 print(p_score)
 ```
 
@@ -348,6 +438,7 @@ df_top10 <- df_pairs_enriched |>
                    confidence,
                    effect_size,
                    direction,
+                   match_level,
                    compatibility_score)
 knitr::kable(df_top10, digits = 3,
              caption = "Top 10 packets by compatibility_score")
@@ -361,6 +452,7 @@ df_bot5 <- df_pairs_enriched |>
                    confidence,
                    effect_size,
                    direction,
+                   match_level,
                    compatibility_score)
 knitr::kable(df_bot5, digits = 3,
              caption = "Bottom 5 packets by compatibility_score")
@@ -381,6 +473,15 @@ DROP, no schema churn).
 #| label: write-db
 con <- load_db()
 assert_schema(con)
+
+# 100-r1.1: ensure the live evidence_packet table has a TEXT support_json
+# column. schema-v0.1.yml is unchanged (the live DB may carry extra columns
+# beyond what the YAML contract declares, per assert_schema's tolerance).
+ev_cols <- DBI::dbListFields(con, "evidence_packet")
+if (!"support_json" %in% ev_cols) {
+  DBI::dbExecute(con, "ALTER TABLE evidence_packet ADD COLUMN support_json TEXT")
+}
+
 DBI::dbExecute(con, "DELETE FROM evidence_packet")
 DBI::dbWriteTable(con, "evidence_packet", df_evidence_packet,
                   append = TRUE, row.names = FALSE)
@@ -406,6 +507,15 @@ db_score_check <- DBI::dbGetQuery(con,
      FROM evidence_packet")
 stopifnot(db_score_check$n_null == 0L,
           db_score_check$min_s > 0, db_score_check$max_s < 1)
+
+# match_level distribution (supplied via support_json JSON blob)
+db_lvl_check <- DBI::dbGetQuery(con,
+  "SELECT json_extract(support_json, '$.match_level') AS match_level,
+          COUNT(*) AS n
+     FROM evidence_packet
+    GROUP BY match_level
+    ORDER BY n DESC")
+print(db_lvl_check)
 
 n <- db_score_check$n_total
 close_db(con)

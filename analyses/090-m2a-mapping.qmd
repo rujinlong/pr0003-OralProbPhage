@@ -26,10 +26,17 @@ plots), not contract-layer writes.
 
 **Ripple ladder**:
 
-- `090-r1`: replace genus prefix with eHOMD-aware fuzzy taxonomy (handle
-  synonyms, basonyms, misspellings, Candidatus naming).
-- `090-r2`: bipartite-graph visualizations (heatmap, network); centrality
-  metrics; partitioning of phage–host modules.
+- `090-r1` (this version): add a **genus-token equality fallback** layer on
+  top of the species/prefix join. Any candidate whose `STR_<Genus>_<...>`
+  shares a genus with a phage host's `STR_<Genus>_<...>` produces a
+  (lower-confidence) mapping, annotated with `match_level = 'genus'`.
+  Rows already covered by the species/prefix join are kept as
+  `match_level = 'species'`; the genus layer only fills gaps. The output
+  feeds 100-knowledge-integration via `mapping_with_fallback.tsv`.
+- `090-r2`: replace string-based genus extraction with eHOMD-aware fuzzy
+  taxonomy (handle synonyms, basonyms, misspellings, Candidatus naming);
+  bipartite-graph visualizations (heatmap, network); centrality metrics;
+  partitioning of phage–host modules.
 
 ```{r}
 #| label: params
@@ -119,6 +126,117 @@ cat("Genus-prefix hits:",
     dplyr::n_distinct(df_prefix$candidate_id),
     " | unique phages:",
     dplyr::n_distinct(df_prefix$vOTU_id), "\n")
+```
+
+## Genus-level fallback (090-r1)
+
+The species/prefix join above (`df_prefix`) catches the easy case:
+candidate `STR_Streptococcus_salivarius` × host `STR_Streptococcus`.
+But it misses pairs where the host token tree is more specific than just
+the genus (e.g. host `STR_Solobacterium_moorei` × candidate
+`STR_Solobacterium_*`), and pairs where both sides are at the same depth
+but neither prefixes the other (e.g. host `STR_Prevotella_shahii` ×
+candidate `STR_Prevotella_denticola`).
+
+The fix is a genus-token equality layer: extract the first non-`STR_`
+token on each side and join on it. Wherever the species/prefix join
+already produced a row, we keep it as `match_level = 'species'`; the genus
+layer only fills the remaining `(candidate_id, link_id)` slots with
+`match_level = 'genus'`. Downstream scoring (in 100) discounts
+`match_level = 'genus'` rows by a 0.6× factor to reflect the lower
+taxonomic resolution.
+
+Edge cases tolerated by the simple regex `^STR_([^_]+).*$`:
+
+- `STR_Candidatus_Saccharimonas_sp` → genus token "Candidatus" (the same
+  token is extracted on both sides, so Candidatus-named candidates still
+  match Candidatus-named hosts — apples-to-apples).
+- `STR_Lachnospiraceae_bacterium` → "Lachnospiraceae" (a family, not
+  strictly a genus, but again symmetric across both tables).
+- `STR_GGB1611_SGB2208` → "GGB1611" (an unnamed-genome bin); these only
+  match other GGB-prefixed tokens, which is the correct behaviour.
+
+```{r}
+#| label: genus-fallback
+extract_genus <- function(x) sub("^STR_([^_]+).*$", "\\1", x)
+
+df_candidate_g <- df_candidate |>
+  dplyr::mutate(candidate_genus = extract_genus(taxon_id))
+df_link_g <- df_link |>
+  dplyr::mutate(host_genus = extract_genus(host_taxon_id))
+
+df_species_layer <- df_prefix |>
+  dplyr::mutate(
+    candidate_genus = extract_genus(taxon_id),
+    host_genus      = extract_genus(host_taxon_id),
+    match_level     = "species"
+  ) |>
+  dplyr::rename(candidate_taxon_id = taxon_id)
+
+df_genus_all <- df_candidate_g |>
+  dplyr::inner_join(df_link_g, by = c("candidate_genus" = "host_genus"),
+                    relationship = "many-to-many") |>
+  dplyr::mutate(host_genus = candidate_genus)
+
+species_keys <- paste(df_species_layer$candidate_id,
+                      df_species_layer$link_id, sep = "|")
+df_genus_layer <- df_genus_all |>
+  dplyr::filter(!paste(candidate_id, link_id, sep = "|") %in% species_keys) |>
+  dplyr::transmute(
+    candidate_id, link_id,
+    candidate_taxon_id = taxon_id,
+    taxon_name, phenotype, direction, effect_size, q_value,
+    vOTU_id, host_taxon_id, evidence_kind, confidence,
+    candidate_genus, host_genus,
+    match_level = "genus"
+  )
+
+df_mapping_with_fallback <- dplyr::bind_rows(
+  df_species_layer |>
+    dplyr::select(candidate_id, link_id, candidate_taxon_id, host_taxon_id,
+                  candidate_genus, host_genus, match_level,
+                  taxon_name, phenotype, direction, effect_size, q_value,
+                  vOTU_id, evidence_kind, confidence),
+  df_genus_layer |>
+    dplyr::select(candidate_id, link_id, candidate_taxon_id, host_taxon_id,
+                  candidate_genus, host_genus, match_level,
+                  taxon_name, phenotype, direction, effect_size, q_value,
+                  vOTU_id, evidence_kind, confidence)
+)
+
+cat("Mapping after fallback union:",
+    nrow(df_mapping_with_fallback),
+    "rows |  species:",
+    sum(df_mapping_with_fallback$match_level == "species"),
+    "  genus:",
+    sum(df_mapping_with_fallback$match_level == "genus"),
+    "\n")
+cat("Distinct candidates with mapping  | species-only:",
+    dplyr::n_distinct(df_species_layer$candidate_id),
+    "  with-fallback:",
+    dplyr::n_distinct(df_mapping_with_fallback$candidate_id), "\n")
+
+readr::write_tsv(df_mapping_with_fallback,
+                 path_target("mapping_with_fallback.tsv"))
+```
+
+```{r}
+#| label: genus-fallback-summary
+df_fallback_genus_summary <- df_genus_layer |>
+  dplyr::group_by(host_genus) |>
+  dplyr::summarise(
+    n_new_pairs       = dplyr::n(),
+    n_new_candidates  = dplyr::n_distinct(candidate_id),
+    n_new_phages      = dplyr::n_distinct(vOTU_id),
+    .groups = "drop"
+  ) |>
+  dplyr::arrange(dplyr::desc(n_new_pairs))
+knitr::kable(
+  utils::head(df_fallback_genus_summary, 15),
+  caption = "Top genera gaining mapping rows from the 090-r1 genus fallback"
+)
+readr::write_tsv(df_fallback_genus_summary,
+                 path_target("fallback_genus_summary.tsv"))
 ```
 
 ## Per-genus summary
