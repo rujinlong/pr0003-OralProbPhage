@@ -3,9 +3,27 @@ title: "080-m2a-host-prediction"
 date: today
 params:
   name: "080-m2a-host-prediction"
+bibliography: references.bib
 ---
 
 **Updated: `r format(Sys.time(), '%Y-%m-%d %H:%M:%S', tz = 'CET')` CET.**
+
+Parses the CAT taxonomy column from the Yahara 2021 viral contig table
+(stashed by 070) into structured `phage_host_link` rows. CAT assigns each
+contig a single best-rank taxonomy string like `Granulicatella (genus): 0.53`.
+The numeric tail is the CAT confidence score (0..1) which we propagate as
+`confidence`. `evidence_kind = "published_prediction"` since these calls
+come from the paper as-is.
+
+We keep only **genus-level or finer** assignments — superkingdom / phylum /
+"no rank" rows are not actionable for host-microbe matching.
+
+**Ripple ladder**:
+
+- `080-r1`: ensemble — re-run host prediction with iPHoP, RaFAH, spacepharer
+  CRISPR matches against eHOMD, BLAST against IMG/VR, and combine via
+  precision-recall–calibrated voting.
+- `080-r2`: deep-learning predictors (vHULK, PHIST) for the long contigs.
 
 ```{r}
 #| label: params
@@ -24,18 +42,10 @@ wd <- "analyses"
 if (basename(getwd()) != wd) {
     setwd(here::here(wd))
 }
-here::i_am(paste0(params$name, ".qmd"), uuid = "974192b5-a14d-4210-96c1-5ffb79a4e647")
+here::i_am(paste0(params$name, ".qmd"), uuid = "d8f9e132-2c2d-4bd9-9a3e-c1bda3e8c8e4")
 qproj::proj_create_dir_target(params$name, clean = FALSE)
 
-# convenience helpers
 path_target <- qproj::proj_path_target(params$name)
-path_source <- qproj::proj_path_source(params$name)
-path_raw <- path_source("00-raw")
-path_resource <- here::here(path_raw, "d00-resource")
-path_data <- here::here(path_raw, paste0("d", params$name))
-dir.create(path_raw, recursive = TRUE, showWarnings = FALSE)
-dir.create(path_data, recursive = TRUE, showWarnings = FALSE)
-dir.create(path_resource, recursive = TRUE, showWarnings = FALSE)
 ```
 
 ```{r}
@@ -47,11 +57,11 @@ suppressPackageStartupMessages({
   library(here)
   library(conflicted)
   library(tidyverse)
-  library(data.table)
+  library(jsonlite)
+  library(digest)
+  library(DBI)
   devtools::load_all()
 })
-# Resolve common dplyr / data.table / stats name clashes up front.
-# Add more `conflicts_prefer()` calls below as needed.
 conflicted::conflicts_prefer(
   dplyr::filter,
   dplyr::lag,
@@ -62,30 +72,129 @@ conflicted::conflicts_prefer(
 )
 ```
 
-## Tasks
-
-This section is designated for your workflow implementation. **Please write all your analysis and processing code here.**
-
-Maintaining your code within this section ensures a clean project structure and facilitates reproducibility. We recommend organizing your workflow into modular tasks—such as data cleaning, analysis, and visualization—using distinct code chunks.
-
-::: {.callout-note}
-## Example structure
-
-This is an example structure to get you started. You can modify it as per your needs.
-:::
-
-### Task 1: Data import
+## Pull the stashed Yahara contig metadata
 
 ```{r}
-#| label: data-import
-#| cache: true
+#| label: pull
+path_in <- here::here("data", "070-m2a-virome-processing",
+                      "phage_meta_for_080.csv")
+stopifnot(file.exists(path_in))
+df_phage_meta <- readr::read_csv(path_in, show_col_types = FALSE)
+cat("Input rows:", nrow(df_phage_meta), "\n")
+```
 
-# Your data import code here
+## Parse the CAT taxonomy string
+
+```{r}
+#| label: parse-cat
+slugify <- function(x) {
+  x |>
+    iconv(to = "ASCII//TRANSLIT") |>
+    gsub("[^A-Za-z0-9]+", "_", x = _) |>
+    gsub("_+$", "", x = _) |>
+    gsub("^_+", "", x = _)
+}
+
+# CAT format: "<name> (<rank>): <conf>"
+re_cat <- "^(.*?)\\s*\\(([^)]+)\\):\\s*([0-9.]+)$"
+
+df_parsed <- df_phage_meta |>
+  dplyr::filter(!is.na(cat_taxonomy)) |>
+  dplyr::mutate(
+    host_name        = sub(re_cat, "\\1", cat_taxonomy),
+    host_rank        = sub(re_cat, "\\2", cat_taxonomy),
+    confidence       = suppressWarnings(as.numeric(sub(re_cat, "\\3", cat_taxonomy)))
+  ) |>
+  dplyr::filter(!is.na(confidence))
+
+cat("After parse:", nrow(df_parsed), "\n")
+cat("Rank distribution:\n")
+print(dplyr::count(df_parsed, host_rank, sort = TRUE))
+```
+
+## Restrict to actionable ranks (genus / species / etc.)
+
+```{r}
+#| label: filter-ranks
+actionable_ranks <- c("genus", "species", "subspecies", "strain")
+df_actionable <- df_parsed |>
+  dplyr::filter(host_rank %in% actionable_ranks) |>
+  dplyr::mutate(
+    host_taxon_id = paste0("STR_", slugify(host_name))
+  )
+cat("Actionable host-link rows:", nrow(df_actionable), "\n")
+print(dplyr::count(df_actionable, host_rank))
+```
+
+## Build `phage_host_link` rows
+
+```{r}
+#| label: build-links
+ver <- schema_version()
+
+df_phage_host_link <- df_actionable |>
+  dplyr::transmute(
+    vOTU_id        = vOTU_id,
+    host_taxon_id,
+    evidence_kind  = "published_prediction",
+    confidence,
+    support_json   = purrr::pmap_chr(
+      list(host_name, host_rank, integrase, virsorter_category, img_vr_cluster),
+      function(host_name, host_rank, integrase, virsorter_category, img_vr_cluster) {
+        jsonlite::toJSON(
+          list(host_name        = host_name,
+               host_rank        = host_rank,
+               integrase        = integrase,
+               virsorter_cat    = virsorter_category,
+               img_vr_cluster   = img_vr_cluster,
+               method           = "CAT (Yahara 2021)"),
+          auto_unbox = TRUE, na = "null"
+        )
+      }
+    ),
+    schema_version = ver
+  ) |>
+  dplyr::mutate(
+    link_id = paste0(
+      "LINK_",
+      vapply(paste(vOTU_id, host_taxon_id, evidence_kind, sep = "|"),
+             function(s) substr(digest::digest(s, algo = "xxhash64"), 1, 12),
+             character(1))
+    )
+  ) |>
+  dplyr::distinct(link_id, .keep_all = TRUE) |>
+  dplyr::select(link_id, vOTU_id, host_taxon_id, evidence_kind,
+                confidence, support_json, schema_version)
+
+cat("phage_host_link rows:", nrow(df_phage_host_link),
+    "| unique vOTUs:", dplyr::n_distinct(df_phage_host_link$vOTU_id),
+    "| unique hosts:", dplyr::n_distinct(df_phage_host_link$host_taxon_id), "\n")
+df_phage_host_link |>
+  dplyr::count(host_taxon_id, sort = TRUE) |>
+  head(15) |>
+  knitr::kable(caption = "Top 15 predicted hosts by phage-link count")
+```
+
+## Write to the contract layer
+
+```{r}
+#| label: write-db
+con <- load_db()
+assert_schema(con)
+write_table_db(con, "phage_host_link", df_phage_host_link, append = FALSE)
+n <- DBI::dbGetQuery(con, "SELECT COUNT(*) AS n FROM phage_host_link")$n
+close_db(con)
+cat("phage_host_link rows in DB:", n, "\n")
+```
+
+## Persist
+
+```{r}
+#| label: persist
+write_csv(df_phage_host_link, path_target("phage_host_link.csv"))
 ```
 
 ## Files written
-
-These files have been written to the target directory, `r paste0("data/", params$name)`:
 
 ```{r}
 #| label: list-files-target

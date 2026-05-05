@@ -1,11 +1,21 @@
 ---
-title: "990-manuscript"
+title: "Oral probiotic phage knowledge layer — MVP data report"
+subtitle: "Stub: numbers and figure links only; prose deferred to ripple."
 date: today
 params:
   name: "990-manuscript"
+bibliography: references.bib
 ---
 
-**Updated: `r format(Sys.time(), '%Y-%m-%d %H:%M:%S', tz = 'CET')` CET.**
+::: {.callout-note}
+## MVP scope
+
+This is the manuscript **stub**. It references the schema, summarises the
+contract-table populations, and links to the figures from 110. No
+introduction / discussion is written yet — that is `990-r1`. When ripples
+land enough cohorts (`020-r1`, `040-r1`) and methods (`050-r1`, `080-r1`),
+the prose will fold around this stub.
+:::
 
 ```{r}
 #| label: params
@@ -24,68 +34,112 @@ wd <- "analyses"
 if (basename(getwd()) != wd) {
     setwd(here::here(wd))
 }
-here::i_am(paste0(params$name, ".qmd"), uuid = "f99d86ed-c1dd-4939-b367-3570796b4648")
+here::i_am(paste0(params$name, ".qmd"), uuid = "9c3df0cc-2706-456c-a93b-d92d52cd2c7c")
 qproj::proj_create_dir_target(params$name, clean = FALSE)
 
-# convenience helpers
 path_target <- qproj::proj_path_target(params$name)
-path_source <- qproj::proj_path_source(params$name)
-path_raw <- path_source("00-raw")
-path_resource <- here::here(path_raw, "d00-resource")
-path_data <- here::here(path_raw, paste0("d", params$name))
-dir.create(path_raw, recursive = TRUE, showWarnings = FALSE)
-dir.create(path_data, recursive = TRUE, showWarnings = FALSE)
-dir.create(path_resource, recursive = TRUE, showWarnings = FALSE)
 ```
 
 ```{r}
 #| label: packages
+#| include: false
 #| message: false
 #| warning: false
 #| cache: false
 suppressPackageStartupMessages({
   library(here)
-  library(conflicted)
   library(tidyverse)
-  library(data.table)
+  library(yaml)
+  library(DBI)
   devtools::load_all()
 })
-# Resolve common dplyr / data.table / stats name clashes up front.
-# Add more `conflicts_prefer()` calls below as needed.
-conflicted::conflicts_prefer(
-  dplyr::filter,
-  dplyr::lag,
-  dplyr::first,
-  dplyr::last,
-  dplyr::between,
-  .quiet = TRUE
-)
 ```
 
-## Tasks
+# Data layer
 
-This section is designated for your workflow implementation. **Please write all your analysis and processing code here.**
-
-Maintaining your code within this section ensures a clean project structure and facilitates reproducibility. We recommend organizing your workflow into modular tasks—such as data cleaning, analysis, and visualization—using distinct code chunks.
-
-::: {.callout-note}
-## Example structure
-
-This is an example structure to get you started. You can modify it as per your needs.
-:::
-
-### Task 1: Data import
+The contract layer defines five core objects plus a data-source registry
+([Sample, TaxonProfile, CandidateMicrobe, PhageHostLink, EvidencePacket]).
+Schema version: `r schema_version()`; canonical YAML lives at
+`analyses/data/010-schema-design/schema-v0.1.yml`.
 
 ```{r}
-#| label: data-import
-#| cache: true
-
-# Your data import code here
+#| label: schema-summary
+#| echo: false
+schema <- yaml::read_yaml(schema_path())
+df_schema_summary <- tibble::tibble(
+  table     = names(schema$tables),
+  pk        = vapply(schema$tables, function(t) t$pk %||% "", character(1)),
+  n_columns = vapply(schema$tables, function(t) length(t$columns), integer(1))
+)
+knitr::kable(df_schema_summary, caption = "Schema v0.1 — six contract tables")
 ```
 
-## Files written
+# Sources used in the MVP
 
-These files have been written to the target directory, `r paste0("data/", params$name)`:
+`r if(file.exists(here::here("data","020-data-source-registry","data_source.csv"))) "" else "(data_source.csv not found)"`
+
+```{r}
+#| label: sources
+#| echo: false
+con <- load_db()
+df_source <- read_table_db(con, "data_source")
+df_summary <- tibble::tibble(
+  table = c("data_source","sample","taxon_profile","candidate_microbe",
+            "phage_host_link","evidence_packet"),
+  rows  = c(
+    DBI::dbGetQuery(con, "SELECT COUNT(*) AS n FROM data_source")$n,
+    DBI::dbGetQuery(con, "SELECT COUNT(*) AS n FROM sample")$n,
+    DBI::dbGetQuery(con, "SELECT COUNT(*) AS n FROM taxon_profile")$n,
+    DBI::dbGetQuery(con, "SELECT COUNT(*) AS n FROM candidate_microbe")$n,
+    DBI::dbGetQuery(con, "SELECT COUNT(*) AS n FROM phage_host_link")$n,
+    DBI::dbGetQuery(con, "SELECT COUNT(*) AS n FROM evidence_packet")$n
+  )
+)
+close_db(con)
+knitr::kable(df_source[, c("source_id","citation_key","doi","source_kind","n_samples")],
+             caption = "Registered MVP data sources")
+knitr::kable(df_summary, caption = "Contract-layer populations after MVP")
+```
+
+The bacteriome layer comes from the Geng et al. 2024 universal periodontitis
+signature [@2024-Universal_Geng], specifically the PRJDB11203 saliva
+sub-cohort. The virome layer comes from the Yahara et al. 2021 long-read
+PromethION oral phageome [@2021-Longread_Yahara].
+
+# MVP figures
+
+- `analyses/data/090-m2a-mapping/fig_genus_mapping.png` — phages per
+  M1a-implicated host genus.
+- `analyses/data/110-evaluation/fig1_samples.png` — sample × source breakdown.
+- `analyses/data/110-evaluation/fig2_volcano.png` — M1a Wilcoxon volcano.
+- `analyses/data/110-evaluation/fig3_phage_coverage.png` — phage-coverage of
+  M1a candidates.
+
+# Methods (skeleton)
+
+- M1a differential: Wilcoxon rank-sum on TSS relative abundances, BH FDR;
+  filter species with prevalence ≥ 10%. See
+  `analyses/050-m1a-differential-analysis.qmd`.
+- M2a host prediction: CAT taxonomy of VIRSorter contigs from the published
+  long-read assembly, restricted to genus-or-finer ranks. See
+  `analyses/080-m2a-host-prediction.qmd`.
+- Mapping: candidate species ↔ phage host via genus-prefix join. See
+  `analyses/090-m2a-mapping.qmd`.
+
+# What's deferred to ripple (manuscript-blocking items)
+
+- multi-cohort meta-analysis (`050-r2`) → upgrade `n_cohorts ≥ 1` MVP
+  candidates to robust signature.
+- Real `compatibility_score` (`100-r1`) → currently `NA`.
+- Cross-cohort virome (`020-r2` + `070-r1` on SLURM) → currently a single
+  long-read paper.
+
+# References {.unnumbered}
+
+::: {#refs}
+:::
+
+## Files written
 
 ```{r}
 #| label: list-files-target

@@ -3,9 +3,25 @@ title: "070-m2a-virome-processing"
 date: today
 params:
   name: "070-m2a-virome-processing"
+bibliography: references.bib
 ---
 
 **Updated: `r format(Sys.time(), '%Y-%m-%d %H:%M:%S', tz = 'CET')` CET.**
+
+Loads the Yahara et al. 2021 long-read oral virome (PromethION saliva
+sequencing, 4 samples, VIRSorter-derived contigs). Populates four `sample`
+rows (saliva, healthy donor) and `taxon_profile` rows (`taxon_kind = "virus"`,
+`abundance_kind = "presence"` since per-sample read counts are sparse and
+inconsistent across the four sheets).
+
+VIRSorter category 3 and category 6 contigs are dropped per the paper's
+convention (low-confidence phage/prophage calls).
+
+**Ripple ladder**:
+
+- `070-r1`: re-process the raw PromethION fastq via ViWrap on SLURM, run CheckV
+  for completeness/quality flags, dereplicate at 95% ANI, regenerate vOTU IDs.
+- `070-r2`: AMG annotation (DRAM-v) and lifestyle (lytic vs temperate) calls.
 
 ```{r}
 #| label: params
@@ -24,18 +40,10 @@ wd <- "analyses"
 if (basename(getwd()) != wd) {
     setwd(here::here(wd))
 }
-here::i_am(paste0(params$name, ".qmd"), uuid = "156f8a54-9b32-4fa5-8b38-66b2897f713c")
+here::i_am(paste0(params$name, ".qmd"), uuid = "8df56fa1-e1f5-484f-b4dd-4b4c9b56b4cf")
 qproj::proj_create_dir_target(params$name, clean = FALSE)
 
-# convenience helpers
 path_target <- qproj::proj_path_target(params$name)
-path_source <- qproj::proj_path_source(params$name)
-path_raw <- path_source("00-raw")
-path_resource <- here::here(path_raw, "d00-resource")
-path_data <- here::here(path_raw, paste0("d", params$name))
-dir.create(path_raw, recursive = TRUE, showWarnings = FALSE)
-dir.create(path_data, recursive = TRUE, showWarnings = FALSE)
-dir.create(path_resource, recursive = TRUE, showWarnings = FALSE)
 ```
 
 ```{r}
@@ -47,11 +55,12 @@ suppressPackageStartupMessages({
   library(here)
   library(conflicted)
   library(tidyverse)
-  library(data.table)
+  library(readxl)
+  library(jsonlite)
+  library(digest)
+  library(DBI)
   devtools::load_all()
 })
-# Resolve common dplyr / data.table / stats name clashes up front.
-# Add more `conflicts_prefer()` calls below as needed.
 conflicted::conflicts_prefer(
   dplyr::filter,
   dplyr::lag,
@@ -62,30 +71,140 @@ conflicted::conflicts_prefer(
 )
 ```
 
-## Tasks
-
-This section is designated for your workflow implementation. **Please write all your analysis and processing code here.**
-
-Maintaining your code within this section ensures a clean project structure and facilitates reproducibility. We recommend organizing your workflow into modular tasks—such as data cleaning, analysis, and visualization—using distinct code chunks.
-
-::: {.callout-note}
-## Example structure
-
-This is an example structure to get you started. You can modify it as per your needs.
-:::
-
-### Task 1: Data import
+## Load Yahara MOESM7 (Supp Data 4: VIRSorter contigs)
 
 ```{r}
-#| label: data-import
+#| label: load
 #| cache: true
+path_xlsx <- here::here("data", "00-raw", "d020-data-source-registry",
+                        "yahara2021", "MOESM7.xlsx")
+stopifnot(file.exists(path_xlsx))
 
-# Your data import code here
+sheets <- readxl::excel_sheets(path_xlsx)
+df_phage_raw <- purrr::map_dfr(sheets, function(s) {
+  d <- readxl::read_excel(path_xlsx, sheet = s, skip = 2,
+                          .name_repair = "universal_quiet")
+  d$sample_label <- s  # Sample1 .. Sample4
+  d
+})
+cat("Total contigs across 4 sheets:", nrow(df_phage_raw), "\n")
+print(dplyr::count(df_phage_raw, sample_label, name = "n_contigs"))
+```
+
+## Filter and shape
+
+```{r}
+#| label: shape
+df_phage <- df_phage_raw |>
+  dplyr::filter(!is.na(phageID),
+                category..VirSorter. %in% c(1, 2, 4, 5)) |>
+  dplyr::mutate(
+    sample_id      = paste0("SAMP_yahara2021_", sample_label),
+    vOTU_index     = sprintf("%05d", dplyr::row_number()),
+    taxon_id       = paste0("vOTU_yahara2021_", vOTU_index),
+    taxon_kind     = "virus",
+    taxon_name     = phageID,
+    abundance      = 1.0,
+    abundance_kind = "presence"
+  )
+cat("After category filter:", nrow(df_phage),
+    "| samples:", dplyr::n_distinct(df_phage$sample_id),
+    "| unique vOTU IDs:", dplyr::n_distinct(df_phage$taxon_id), "\n")
+```
+
+## Build `sample` rows for the four Yahara saliva samples
+
+```{r}
+#| label: build-sample
+df_sample_yahara <- tibble::tibble(
+  sample_id      = paste0("SAMP_yahara2021_", sheets),
+  source_id      = "yahara2021",
+  subject_id     = "yahara2021_donor",  # one donor across the four conditions
+  disease_status = "healthy",
+  body_site      = "saliva",
+  seq_type       = "virome",
+  meta_json      = jsonlite::toJSON(
+    list(platform = "PromethION + HiSeq",
+         note     = "single donor x 4 conditions"),
+    auto_unbox = TRUE
+  ) |> rep(length(sheets))
+)
+df_sample_yahara
+```
+
+## Build `taxon_profile` rows
+
+```{r}
+#| label: build-taxon-profile
+df_taxon_profile_v <- df_phage |>
+  dplyr::mutate(
+    profile_id = paste0(
+      "PROF_",
+      vapply(paste0(sample_id, "|", taxon_id),
+             function(s) substr(digest::digest(s, algo = "xxhash64"), 1, 12),
+             character(1))
+    )
+  ) |>
+  dplyr::select(profile_id, sample_id, taxon_id, taxon_kind, taxon_name,
+                abundance, abundance_kind)
+stopifnot(!any(duplicated(df_taxon_profile_v$profile_id)))
+cat("virus taxon_profile rows:", nrow(df_taxon_profile_v), "\n")
+```
+
+## Stash phage metadata for 080 (host prediction)
+
+The full phage table — including the CAT-assigned host taxonomy — is the
+input to module 080. Persist it as a CSV that 080 will read.
+
+```{r}
+#| label: stash-phage-meta
+df_phage_for_080 <- df_phage |>
+  dplyr::transmute(
+    sample_id,
+    vOTU_id              = taxon_id,
+    phageID,
+    phageLen,
+    linear_or_circular   = linear.or.circular,
+    integrase            = Integrase,
+    virsorter_category   = category..VirSorter.,
+    cat_taxonomy         = taxonomy.assigned.to.the.contig.by.CAT,
+    img_vr_cluster       = clustered.with.IMG.VR.v2.0,
+    assigned_family      = assigned.family
+  )
+write_csv(df_phage_for_080, path_target("phage_meta_for_080.csv"))
+```
+
+## Write to the contract layer (append, since 040 already wrote bacterial samples + profiles)
+
+```{r}
+#| label: write-db
+con <- load_db()
+assert_schema(con)
+
+# Append the 4 Yahara samples (don't truncate the 42 Geng samples 040 wrote)
+DBI::dbExecute(con,
+  "DELETE FROM sample WHERE source_id = 'yahara2021'")
+DBI::dbWriteTable(con, "sample", df_sample_yahara, append = TRUE,
+                  row.names = FALSE)
+
+DBI::dbExecute(con,
+  "DELETE FROM taxon_profile WHERE taxon_kind = 'virus'")
+DBI::dbWriteTable(con, "taxon_profile", df_taxon_profile_v, append = TRUE,
+                  row.names = FALSE)
+
+df_check <- tibble::tibble(
+  table = c("sample", "taxon_profile_bacteria", "taxon_profile_virus"),
+  rows  = c(
+    DBI::dbGetQuery(con, "SELECT COUNT(*) AS n FROM sample")$n,
+    DBI::dbGetQuery(con, "SELECT COUNT(*) AS n FROM taxon_profile WHERE taxon_kind='bacterium'")$n,
+    DBI::dbGetQuery(con, "SELECT COUNT(*) AS n FROM taxon_profile WHERE taxon_kind='virus'")$n
+  )
+)
+close_db(con)
+knitr::kable(df_check, caption = "Contract tables after 070 write")
 ```
 
 ## Files written
-
-These files have been written to the target directory, `r paste0("data/", params$name)`:
 
 ```{r}
 #| label: list-files-target

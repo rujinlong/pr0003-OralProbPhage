@@ -1,0 +1,9 @@
+run_id	platform	condition	notes
+DRR251800	PromethION	t1	placeholder — verify against PRJDB10485 on SRA
+DRR251801	PromethION	t2	placeholder
+DRR251802	PromethION	t3	placeholder
+DRR251803	PromethION	t4	placeholder
+DRR251804	HiSeq	t1	short-read companion
+DRR251805	HiSeq	t2	short-read companion
+DRR251806	HiSeq	t3	short-read companion
+DRR251807	HiSeq	t4	short-read companion

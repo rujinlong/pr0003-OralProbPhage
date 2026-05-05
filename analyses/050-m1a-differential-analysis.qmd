@@ -3,9 +3,26 @@ title: "050-m1a-differential-analysis"
 date: today
 params:
   name: "050-m1a-differential-analysis"
+bibliography: references.bib
 ---
 
 **Updated: `r format(Sys.time(), '%Y-%m-%d %H:%M:%S', tz = 'CET')` CET.**
+
+Multi-method, single-cohort differential abundance analysis on the
+Geng PRJDB11203 saliva sub-cohort. The MVP baseline (Wilcoxon rank-sum +
+Benjamini–Hochberg FDR on TSS-normalized relative abundances) is preserved
+verbatim. Ripple `050-r1` adds three additional methods (MaAsLin2, ANCOMBC,
+DESeq2) and emits a consensus candidate set requiring agreement (q < 0.1 +
+consistent direction) in ≥ 2 of the 4 methods. Output goes into
+`candidate_microbe` (phenotype = "periodontitis").
+
+**Ripple ladder**:
+
+- `050-r1` (this revision): MaAsLin2 + ANCOMBC + DESeq2 alongside Wilcoxon,
+  with consensus requiring q < 0.1 in ≥ 2 of 4 methods + matching direction.
+- `050-r2`: cross-cohort meta-analysis (random-effects) over the seven Geng
+  cohorts; emit candidates with `n_cohorts ≥ 3`.
+- `050-r3`: pathway-level candidates from HUMAnN3 in addition to species.
 
 ```{r}
 #| label: params
@@ -24,18 +41,10 @@ wd <- "analyses"
 if (basename(getwd()) != wd) {
     setwd(here::here(wd))
 }
-here::i_am(paste0(params$name, ".qmd"), uuid = "088353b4-4ae8-444c-bc67-4d03ee852110")
+here::i_am(paste0(params$name, ".qmd"), uuid = "07ad2b48-bbcc-4ba2-86f1-d4ad7c7ec6cd")
 qproj::proj_create_dir_target(params$name, clean = FALSE)
 
-# convenience helpers
 path_target <- qproj::proj_path_target(params$name)
-path_source <- qproj::proj_path_source(params$name)
-path_raw <- path_source("00-raw")
-path_resource <- here::here(path_raw, "d00-resource")
-path_data <- here::here(path_raw, paste0("d", params$name))
-dir.create(path_raw, recursive = TRUE, showWarnings = FALSE)
-dir.create(path_data, recursive = TRUE, showWarnings = FALSE)
-dir.create(path_resource, recursive = TRUE, showWarnings = FALSE)
 ```
 
 ```{r}
@@ -47,45 +56,468 @@ suppressPackageStartupMessages({
   library(here)
   library(conflicted)
   library(tidyverse)
-  library(data.table)
+  library(digest)
+  library(DBI)
+  library(Maaslin2)
+  library(ANCOMBC)
+  library(DESeq2)
+  library(phyloseq)
   devtools::load_all()
 })
-# Resolve common dplyr / data.table / stats name clashes up front.
-# Add more `conflicts_prefer()` calls below as needed.
 conflicted::conflicts_prefer(
   dplyr::filter,
   dplyr::lag,
   dplyr::first,
   dplyr::last,
   dplyr::between,
+  dplyr::desc,
+  dplyr::collapse,
+  dplyr::count,
+  dplyr::rename,
+  dplyr::select,
+  dplyr::slice,
+  dplyr::combine,
+  base::setdiff,
+  base::intersect,
+  base::union,
+  base::Reduce,
+  base::Position,
+  base::Find,
+  base::Filter,
+  base::Map,
+  base::strsplit,
+  stats::IQR,
+  base::which,
   .quiet = TRUE
 )
 ```
 
-## Tasks
-
-This section is designated for your workflow implementation. **Please write all your analysis and processing code here.**
-
-Maintaining your code within this section ensures a clean project structure and facilitates reproducibility. We recommend organizing your workflow into modular tasks—such as data cleaning, analysis, and visualization—using distinct code chunks.
-
-::: {.callout-note}
-## Example structure
-
-This is an example structure to get you started. You can modify it as per your needs.
-:::
-
-### Task 1: Data import
+## Pull samples + abundances from the contract layer
 
 ```{r}
-#| label: data-import
-#| cache: true
+#| label: pull
+con <- load_db()
+df_sample <- read_table_db(con, "sample") |>
+  dplyr::filter(source_id == "geng2024_PRJDB11203")
+df_profile <- read_table_db(con, "taxon_profile") |>
+  dplyr::filter(sample_id %in% df_sample$sample_id, taxon_kind == "bacterium")
+close_db(con)
 
-# Your data import code here
+df_wide <- df_profile |>
+  dplyr::select(sample_id, taxon_id, taxon_name, abundance) |>
+  tidyr::pivot_wider(id_cols = c(taxon_id, taxon_name),
+                     names_from = sample_id, values_from = abundance,
+                     values_fill = 0)
+
+cat("Wide matrix:", nrow(df_wide), "species x",
+    ncol(df_wide) - 2, "samples\n")
+```
+
+## Wilcoxon rank-sum (peri vs healthy)
+
+```{r}
+#| label: wilcoxon
+ids_case <- df_sample$sample_id[df_sample$disease_status == "periodontitis"]
+ids_ctrl <- df_sample$sample_id[df_sample$disease_status == "healthy"]
+stopifnot(length(ids_case) >= 5, length(ids_ctrl) >= 5)
+
+# species must be present (>0) in >= 10% of all samples to be tested
+mat_abund <- as.matrix(df_wide[, c(ids_case, ids_ctrl)])
+rownames(mat_abund) <- df_wide$taxon_id
+prevalence <- rowMeans(mat_abund > 0)
+keep <- prevalence >= 0.10
+
+df_test <- tibble::tibble(
+  taxon_id   = df_wide$taxon_id[keep],
+  taxon_name = df_wide$taxon_name[keep]
+) |>
+  dplyr::mutate(
+    mean_case = rowMeans(mat_abund[keep, ids_case, drop = FALSE]),
+    mean_ctrl = rowMeans(mat_abund[keep, ids_ctrl, drop = FALSE]),
+    p_value   = purrr::map2_dbl(
+      asplit(mat_abund[keep, ids_case, drop = FALSE], 1),
+      asplit(mat_abund[keep, ids_ctrl, drop = FALSE], 1),
+      function(a, b) {
+        suppressWarnings(stats::wilcox.test(a, b, exact = FALSE)$p.value)
+      }
+    ),
+    effect_size = log2((mean_case + 1e-6) / (mean_ctrl + 1e-6)),
+    direction   = ifelse(effect_size > 0, "disease_enriched", "health_enriched"),
+    q_value     = stats::p.adjust(p_value, method = "BH")
+  )
+cat("Tested species:", nrow(df_test), "| q<0.1:", sum(df_test$q_value < 0.1, na.rm = TRUE), "\n")
+```
+
+## Build Wilcoxon `candidate_microbe` rows (MVP baseline, preserved)
+
+We keep all tested species with `q_value < 0.1` plus, if fewer than 30 pass,
+top-up with the smallest-p species so the MVP downstream has signal. (Ripple
+will tighten this back to a strict q<0.1 once meta-analysis is in place.)
+
+```{r}
+#| label: build-candidates
+df_pass <- df_test |>
+  dplyr::arrange(p_value) |>
+  dplyr::filter(q_value < 0.1)
+
+if (nrow(df_pass) < 30) {
+  df_topup <- df_test |>
+    dplyr::arrange(p_value) |>
+    dplyr::filter(!taxon_id %in% df_pass$taxon_id) |>
+    head(30 - nrow(df_pass))
+  df_candidates <- dplyr::bind_rows(df_pass, df_topup)
+} else {
+  df_candidates <- df_pass
+}
+
+ver <- schema_version()
+
+df_candidate_microbe <- df_candidates |>
+  dplyr::mutate(
+    phenotype      = "periodontitis",
+    n_cohorts      = 1L,
+    method         = "wilcoxon",
+    schema_version = ver,
+    candidate_id   = paste0(
+      "CAND_",
+      vapply(paste(taxon_id, phenotype, method, sep = "|"),
+             function(s) substr(digest::digest(s, algo = "xxhash64"), 1, 12),
+             character(1))
+    )
+  ) |>
+  dplyr::select(candidate_id, taxon_id, taxon_name, phenotype, direction,
+                effect_size, p_value, q_value, n_cohorts, method, schema_version)
+
+stopifnot(!any(duplicated(df_candidate_microbe$candidate_id)))
+df_candidate_microbe |>
+  head(20) |>
+  knitr::kable(caption = "Top 20 candidate microbes (smallest p)")
+```
+
+```{r}
+#| label: direction-balance
+dplyr::count(df_candidate_microbe, direction) |>
+  knitr::kable(caption = "Direction balance among Wilcoxon candidates")
+```
+
+## Helper: rows in the long candidate format
+
+```{r}
+#| label: helper-rows
+make_candidate_rows <- function(df, method_name) {
+  df |>
+    dplyr::mutate(
+      phenotype      = "periodontitis",
+      n_cohorts      = 1L,
+      method         = method_name,
+      schema_version = ver,
+      candidate_id   = paste0(
+        "CAND_",
+        vapply(paste(taxon_id, phenotype, method, sep = "|"),
+               function(s) substr(digest::digest(s, algo = "xxhash64"), 1, 12),
+               character(1))
+      )
+    ) |>
+    dplyr::select(candidate_id, taxon_id, taxon_name, phenotype, direction,
+                  effect_size, p_value, q_value, n_cohorts, method,
+                  schema_version)
+}
+
+# Reused inputs for every method
+mat_filt   <- mat_abund[keep, , drop = FALSE]                   # filtered abundance
+df_features <- df_wide |> dplyr::filter(taxon_id %in% rownames(mat_filt)) |>
+  dplyr::select(taxon_id, taxon_name)
+df_meta    <- tibble::tibble(
+  sample_id      = c(ids_case, ids_ctrl),
+  disease_status = c(rep("periodontitis", length(ids_case)),
+                     rep("healthy",       length(ids_ctrl)))
+) |>
+  dplyr::mutate(disease_status = factor(disease_status,
+                                        levels = c("healthy", "periodontitis")))
+df_meta_df <- as.data.frame(df_meta); rownames(df_meta_df) <- df_meta$sample_id
+mat_for_methods <- mat_filt[, df_meta$sample_id, drop = FALSE]
+```
+
+## MaAsLin2
+
+```{r}
+#| label: maaslin2
+#| message: false
+#| warning: false
+path_maaslin <- path_target("maaslin2_out")
+if (dir.exists(path_maaslin)) unlink(path_maaslin, recursive = TRUE)
+
+# Maaslin2 wants samples as rows, features as cols
+mat_maaslin <- t(mat_for_methods)
+
+fit_maaslin <- Maaslin2::Maaslin2(
+  input_data        = as.data.frame(mat_maaslin),
+  input_metadata    = df_meta_df,
+  output            = path_maaslin,
+  fixed_effects     = "disease_status",
+  reference         = "disease_status,healthy",
+  normalization     = "TSS",
+  transform         = "LOG",
+  analysis_method   = "LM",
+  min_prevalence    = 0.10,
+  min_abundance     = 0,
+  max_significance  = 1,
+  plot_heatmap      = FALSE,
+  plot_scatter      = FALSE,
+  standardize       = FALSE
+)
+
+df_maaslin <- tibble::as_tibble(fit_maaslin$results) |>
+  dplyr::filter(metadata == "disease_status",
+                value    == "periodontitis") |>
+  dplyr::transmute(
+    taxon_id    = feature,
+    effect_size = coef,
+    p_value     = pval,
+    q_value     = qval,
+    direction   = ifelse(coef > 0, "disease_enriched", "health_enriched")
+  ) |>
+  dplyr::left_join(df_features, by = "taxon_id") |>
+  dplyr::filter(!is.na(p_value))
+
+cat("MaAsLin2: tested", nrow(df_maaslin),
+    "| q<0.1:", sum(df_maaslin$q_value < 0.1, na.rm = TRUE), "\n")
+
+df_cand_maaslin <- df_maaslin |>
+  dplyr::filter(q_value < 0.1) |>
+  make_candidate_rows("maaslin2")
+```
+
+## ANCOMBC
+
+```{r}
+#| label: ancombc
+#| message: false
+#| warning: false
+# ANCOMBC needs counts; round(rel_abund * 1e6) is the standard trick.
+mat_counts <- round(mat_for_methods * 1e6)
+storage.mode(mat_counts) <- "integer"
+
+ps_otu  <- phyloseq::otu_table(mat_counts, taxa_are_rows = TRUE)
+ps_samp <- phyloseq::sample_data(df_meta_df)
+ps_obj  <- phyloseq::phyloseq(ps_otu, ps_samp)
+
+fit_ancom <- ANCOMBC::ancombc(
+  data         = ps_obj,
+  formula      = "disease_status",
+  p_adj_method = "BH",
+  prv_cut      = 0.10,
+  group        = "disease_status",
+  struc_zero   = FALSE,
+  neg_lb       = FALSE,
+  conserve     = TRUE,
+  verbose      = FALSE
+)
+
+df_ancom_raw <- tibble::tibble(
+  taxon_id    = fit_ancom$res$lfc$taxon,
+  effect_size = fit_ancom$res$lfc[["disease_statusperiodontitis"]],
+  p_value     = fit_ancom$res$p_val[["disease_statusperiodontitis"]],
+  q_value     = fit_ancom$res$q_val[["disease_statusperiodontitis"]]
+) |>
+  dplyr::mutate(
+    direction = ifelse(effect_size > 0, "disease_enriched", "health_enriched")
+  ) |>
+  dplyr::left_join(df_features, by = "taxon_id") |>
+  dplyr::filter(!is.na(p_value))
+
+cat("ANCOMBC: tested", nrow(df_ancom_raw),
+    "| q<0.1:", sum(df_ancom_raw$q_value < 0.1, na.rm = TRUE), "\n")
+
+df_cand_ancom <- df_ancom_raw |>
+  dplyr::filter(q_value < 0.1) |>
+  make_candidate_rows("ancombc")
+```
+
+## DESeq2
+
+```{r}
+#| label: deseq2
+#| message: false
+#| warning: false
+# Same count trick. DESeq2 requires integer counts.
+dds <- DESeq2::DESeqDataSetFromMatrix(
+  countData = mat_counts,
+  colData   = df_meta_df,
+  design    = ~ disease_status
+)
+# poscounts size factors handle zero-rich microbiome data better than RLE
+dds <- DESeq2::estimateSizeFactors(dds, type = "poscounts")
+dds <- DESeq2::DESeq(dds, quiet = TRUE)
+res <- DESeq2::results(dds,
+                      contrast = c("disease_status", "periodontitis", "healthy"))
+df_deseq <- tibble::tibble(
+  taxon_id    = rownames(res),
+  effect_size = res$log2FoldChange,
+  p_value     = res$pvalue,
+  q_value     = stats::p.adjust(res$pvalue, method = "BH")
+) |>
+  dplyr::mutate(
+    direction = ifelse(effect_size > 0, "disease_enriched", "health_enriched")
+  ) |>
+  dplyr::left_join(df_features, by = "taxon_id") |>
+  dplyr::filter(!is.na(p_value))
+
+cat("DESeq2: tested", nrow(df_deseq),
+    "| q<0.1:", sum(df_deseq$q_value < 0.1, na.rm = TRUE), "\n")
+
+df_cand_deseq <- df_deseq |>
+  dplyr::filter(q_value < 0.1) |>
+  make_candidate_rows("deseq2")
+```
+
+## Wilcoxon → method-tagged rows (full results)
+
+```{r}
+#| label: wilcoxon-full
+df_wilcox_full <- df_test |>
+  dplyr::transmute(taxon_id, taxon_name, effect_size, p_value, q_value,
+                   direction)
+```
+
+## Method agreement diagnostics
+
+```{r}
+#| label: agreement
+df_methods <- list(
+  wilcoxon = df_wilcox_full,
+  maaslin2 = df_maaslin,
+  ancombc  = df_ancom_raw,
+  deseq2   = df_deseq
+)
+
+# significant set per method (q<0.1, with direction)
+sig_sets <- purrr::imap(df_methods, function(df, m) {
+  df |>
+    dplyr::filter(q_value < 0.1) |>
+    dplyr::transmute(taxon_id, direction)
+})
+
+df_agree <- tidyr::expand_grid(a = names(sig_sets), b = names(sig_sets)) |>
+  dplyr::filter(a < b) |>
+  dplyr::mutate(
+    n_a       = vapply(a, function(x) nrow(sig_sets[[x]]), integer(1)),
+    n_b       = vapply(b, function(x) nrow(sig_sets[[x]]), integer(1)),
+    n_overlap = purrr::map2_int(a, b, function(x, y) {
+      length(intersect(sig_sets[[x]]$taxon_id, sig_sets[[y]]$taxon_id))
+    }),
+    jaccard = purrr::map2_dbl(a, b, function(x, y) {
+      ix <- intersect(sig_sets[[x]]$taxon_id, sig_sets[[y]]$taxon_id)
+      un <- union(sig_sets[[x]]$taxon_id, sig_sets[[y]]$taxon_id)
+      if (length(un) == 0) NA_real_ else length(ix) / length(un)
+    })
+  )
+knitr::kable(df_agree, digits = 3,
+             caption = "Pairwise overlap among q<0.1 sets across methods")
+```
+
+## Consensus candidate set
+
+A species enters the consensus set if it is significant (q<0.1) in
+≥ 2 of the 4 methods AND all flagging methods agree on direction. The
+consensus row's effect-size is the mean of the flagging methods' effect-sizes,
+and the q-value is the **maximum** across flagging methods (conservative).
+
+```{r}
+#| label: consensus
+df_long_sig <- purrr::imap_dfr(df_methods, function(df, m) {
+  df |>
+    dplyr::filter(q_value < 0.1) |>
+    dplyr::mutate(method = m)
+})
+
+df_consensus <- df_long_sig |>
+  dplyr::group_by(taxon_id, taxon_name) |>
+  dplyr::summarise(
+    n_methods         = dplyr::n(),
+    n_dir_disease     = sum(direction == "disease_enriched"),
+    n_dir_health      = sum(direction == "health_enriched"),
+    effect_size       = mean(effect_size, na.rm = TRUE),
+    q_value           = max(q_value,      na.rm = TRUE),
+    methods_flagging  = paste(sort(method), collapse = ","),
+    .groups = "drop"
+  ) |>
+  dplyr::filter(n_methods >= 2,
+                n_dir_disease == 0 | n_dir_health == 0) |>
+  dplyr::mutate(
+    direction = ifelse(n_dir_disease > 0, "disease_enriched", "health_enriched"),
+    p_value   = NA_real_
+  )
+
+cat("Consensus species (q<0.1 in >=2 methods + concordant direction):",
+    nrow(df_consensus), "\n")
+
+df_cand_consensus <- df_consensus |>
+  dplyr::select(taxon_id, taxon_name, effect_size, p_value, q_value,
+                direction) |>
+  make_candidate_rows("consensus")
+
+if (nrow(df_consensus) > 0) {
+  df_consensus |>
+    dplyr::arrange(q_value) |>
+    head(15) |>
+    dplyr::select(taxon_id, taxon_name, n_methods, direction,
+                  effect_size, q_value, methods_flagging) |>
+    knitr::kable(digits = 3,
+                 caption = "Top 15 consensus species (sorted by q_value)")
+}
+```
+
+## Combine all methods + write to the contract layer
+
+```{r}
+#| label: write-db
+df_all_methods <- dplyr::bind_rows(
+  df_candidate_microbe,    # wilcoxon (preserved MVP block)
+  df_cand_maaslin,
+  df_cand_ancom,
+  df_cand_deseq,
+  df_cand_consensus
+)
+
+stopifnot(!any(duplicated(df_all_methods$candidate_id)))
+
+con <- load_db()
+assert_schema(con)
+DBI::dbExecute(con, "DELETE FROM candidate_microbe WHERE phenotype = 'periodontitis'")
+DBI::dbWriteTable(con, "candidate_microbe", df_all_methods,
+                  append = TRUE, row.names = FALSE)
+df_summary <- DBI::dbGetQuery(
+  con,
+  "SELECT method, direction, COUNT(*) AS n
+     FROM candidate_microbe
+    WHERE phenotype = 'periodontitis'
+ GROUP BY method, direction
+ ORDER BY method, direction"
+)
+n_total <- DBI::dbGetQuery(con,
+  "SELECT COUNT(*) AS n FROM candidate_microbe")$n
+close_db(con)
+
+knitr::kable(df_summary,
+             caption = "candidate_microbe rows by method × direction (in DB)")
+cat("Total candidate_microbe rows in DB:", n_total, "\n")
+```
+
+## Persist
+
+```{r}
+#| label: persist
+write_csv(df_test,           path_target("wilcoxon_full_results.csv"))
+write_csv(df_maaslin,        path_target("maaslin2_full_results.csv"))
+write_csv(df_ancom_raw,      path_target("ancombc_full_results.csv"))
+write_csv(df_deseq,          path_target("deseq2_full_results.csv"))
+write_csv(df_all_methods,    path_target("candidate_microbe.csv"))
+write_csv(df_agree,          path_target("method_agreement.csv"))
+write_csv(df_consensus,      path_target("consensus_species.csv"))
 ```
 
 ## Files written
-
-These files have been written to the target directory, `r paste0("data/", params$name)`:
 
 ```{r}
 #| label: list-files-target

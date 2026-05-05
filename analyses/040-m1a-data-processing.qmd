@@ -3,9 +3,24 @@ title: "040-m1a-data-processing"
 date: today
 params:
   name: "040-m1a-data-processing"
+bibliography: references.bib
 ---
 
 **Updated: `r format(Sys.time(), '%Y-%m-%d %H:%M:%S', tz = 'CET')` CET.**
+
+Loads the six Geng et al. 2024 modeling bacteriome cohorts (PRJDB11203,
+PRJNA230363, PRJNA396840, PRJNA678453, PRJNA717815, PRJNA932553 — 223 saliva
+/ oral samples in total, MetaPhlAn-derived species-level relative
+abundances) into the contract layer. Populates `sample` (one row per
+sequencing run) and `taxon_profile` (non-zero abundances only, long format).
+
+The DB writes are **partition-based**: rows whose `source_id` starts with
+`geng2024_` (resp. profiles whose `sample_id` starts with `SAMP_geng2024_`)
+are deleted before the new batch is appended, so the Yahara virome rows
+written by module 070 survive across re-renders.
+
+**Ripple-2** (`040-r2`): add HMT/NCBI taxon ID resolution against eHOMD
+instead of the slug fallback.
 
 ```{r}
 #| label: params
@@ -24,18 +39,11 @@ wd <- "analyses"
 if (basename(getwd()) != wd) {
     setwd(here::here(wd))
 }
-here::i_am(paste0(params$name, ".qmd"), uuid = "54898b32-3ea5-43d4-8669-5f042da7dee4")
+here::i_am(paste0(params$name, ".qmd"), uuid = "1cc77e2d-3ac3-4a7e-9b32-a5fb86b50d75")
 qproj::proj_create_dir_target(params$name, clean = FALSE)
 
-# convenience helpers
 path_target <- qproj::proj_path_target(params$name)
 path_source <- qproj::proj_path_source(params$name)
-path_raw <- path_source("00-raw")
-path_resource <- here::here(path_raw, "d00-resource")
-path_data <- here::here(path_raw, paste0("d", params$name))
-dir.create(path_raw, recursive = TRUE, showWarnings = FALSE)
-dir.create(path_data, recursive = TRUE, showWarnings = FALSE)
-dir.create(path_resource, recursive = TRUE, showWarnings = FALSE)
 ```
 
 ```{r}
@@ -47,11 +55,11 @@ suppressPackageStartupMessages({
   library(here)
   library(conflicted)
   library(tidyverse)
-  library(data.table)
+  library(jsonlite)
+  library(digest)
+  library(DBI)
   devtools::load_all()
 })
-# Resolve common dplyr / data.table / stats name clashes up front.
-# Add more `conflicts_prefer()` calls below as needed.
 conflicted::conflicts_prefer(
   dplyr::filter,
   dplyr::lag,
@@ -62,30 +70,189 @@ conflicted::conflicts_prefer(
 )
 ```
 
-## Tasks
-
-This section is designated for your workflow implementation. **Please write all your analysis and processing code here.**
-
-Maintaining your code within this section ensures a clean project structure and facilitates reproducibility. We recommend organizing your workflow into modular tasks—such as data cleaning, analysis, and visualization—using distinct code chunks.
-
-::: {.callout-note}
-## Example structure
-
-This is an example structure to get you started. You can modify it as per your needs.
-:::
-
-### Task 1: Data import
+## Load the cohort matrices and metadata
 
 ```{r}
-#| label: data-import
+#| label: load-rdata
 #| cache: true
+path_geng_rdata <- here::here("data", "00-raw", "d020-data-source-registry",
+                              "wei2024-imeta-repo", "Rdata", "Figure 01.Rdata")
+stopifnot(file.exists(path_geng_rdata))
+load(path_geng_rdata)  # creates `my_data` (list with feat_list, meta_list)
 
-# Your data import code here
+project_ids <- intersect(names(my_data$feat_list), names(my_data$meta_list))
+stopifnot(length(project_ids) >= 1)
+cat("Cohorts loaded from Geng Rdata:", paste(project_ids, collapse = ", "), "\n")
+
+df_cohort_dims <- purrr::map_dfr(project_ids, function(pid) {
+  m <- my_data$feat_list[[pid]]
+  d <- my_data$meta_list[[pid]]
+  tibble::tibble(project_id = pid,
+                 n_samples_feat = nrow(m), n_species = ncol(m),
+                 n_samples_meta = nrow(d))
+})
+knitr::kable(df_cohort_dims, caption = "Per-cohort matrix / metadata dims")
+```
+
+## Build the `sample` rows (all six cohorts)
+
+```{r}
+#| label: build-sample
+slugify <- function(x) {
+  x |>
+    iconv(to = "ASCII//TRANSLIT") |>
+    gsub("[^A-Za-z0-9]+", "_", x = _) |>
+    gsub("_+$", "", x = _) |>
+    gsub("^_+", "", x = _)
+}
+
+build_sample_one <- function(pid) {
+  df_meta_raw <- my_data$meta_list[[pid]]
+  df_meta_raw |>
+    tibble::rownames_to_column("run_id") |>
+    dplyr::mutate(
+      sample_id = paste0("SAMP_geng2024_", run_id),
+      source_id = paste0("geng2024_", pid),
+      subject_id = run_id,
+      disease_status = dplyr::case_when(
+        Group == "Case"    ~ "periodontitis",
+        Group == "Control" ~ "healthy",
+        TRUE               ~ "other"
+      ),
+      body_site = dplyr::if_else(
+        is.na(Bodysite) | Bodysite == "", "saliva", as.character(Bodysite)
+      ),
+      seq_type  = "shotgun",
+      meta_json = purrr::pmap_chr(
+        list(country, sex, host_age, BMI, disease_stage, Bodysite),
+        function(country, sex, host_age, BMI, disease_stage, Bodysite) {
+          jsonlite::toJSON(
+            list(country = country, sex = sex, host_age = host_age,
+                 BMI = BMI, disease_stage = disease_stage,
+                 bodysite = Bodysite),
+            auto_unbox = TRUE, na = "null"
+          )
+        }
+      )
+    ) |>
+    dplyr::select(sample_id, source_id, subject_id, disease_status,
+                  body_site, seq_type, meta_json)
+}
+
+df_sample <- purrr::map_dfr(project_ids, build_sample_one)
+stopifnot(!any(duplicated(df_sample$sample_id)))
+
+dplyr::count(df_sample, source_id, disease_status) |>
+  tidyr::pivot_wider(names_from = disease_status, values_from = n,
+                     values_fill = 0L) |>
+  knitr::kable(caption = "Sample disease status distribution per cohort")
+```
+
+## Build `taxon_profile` (long, non-zero only)
+
+```{r}
+#| label: build-taxon-profile
+build_profile_one <- function(pid) {
+  mat_abund <- my_data$feat_list[[pid]]
+  mat_abund |>
+    as.data.frame() |>
+    tibble::rownames_to_column("run_id") |>
+    tidyr::pivot_longer(-run_id, names_to = "taxon_name",
+                        values_to = "abundance") |>
+    dplyr::filter(abundance > 0) |>
+    dplyr::mutate(
+      sample_id      = paste0("SAMP_geng2024_", run_id),
+      taxon_id       = paste0("STR_", slugify(taxon_name)),
+      taxon_kind     = "bacterium",
+      abundance_kind = "rel_abund"
+    )
+}
+
+df_long <- purrr::map_dfr(project_ids, build_profile_one)
+
+df_taxon_profile <- df_long |>
+  dplyr::mutate(
+    profile_id = paste0(
+      "PROF_",
+      vapply(paste0(sample_id, "|", taxon_id),
+             function(s) substr(digest::digest(s, algo = "xxhash64"), 1, 12),
+             character(1))
+    )
+  ) |>
+  dplyr::select(profile_id, sample_id, taxon_id, taxon_kind, taxon_name,
+                abundance, abundance_kind)
+
+cat("taxon_profile rows:", nrow(df_taxon_profile),
+    " | unique taxa:", dplyr::n_distinct(df_taxon_profile$taxon_id),
+    " | unique samples:", dplyr::n_distinct(df_taxon_profile$sample_id), "\n")
+stopifnot(!any(duplicated(df_taxon_profile$profile_id)))
+
+df_taxon_profile |>
+  dplyr::count(sample_id) |>
+  dplyr::summarise(
+    median_per_sample = stats::median(n),
+    min_per_sample = min(n),
+    max_per_sample = max(n),
+    n_samples = dplyr::n()
+  ) |>
+  knitr::kable(caption = "Per-sample non-zero species counts")
+```
+
+## Write to the contract layer (partition-based)
+
+We delete only the geng2024 partition before appending, so module 070's
+Yahara virome rows in `sample` and `taxon_profile` are preserved.
+
+```{r}
+#| label: write-db
+con <- load_db()
+assert_schema(con)
+
+# Sanity-check: each cohort must already be registered in data_source
+n_src <- DBI::dbGetQuery(
+  con,
+  "SELECT COUNT(*) AS n FROM data_source WHERE source_id LIKE 'geng2024_%'"
+)$n
+stopifnot(n_src == length(project_ids))
+
+DBI::dbExecute(con,
+  "DELETE FROM sample WHERE source_id LIKE 'geng2024_%'")
+DBI::dbWriteTable(con, "sample", df_sample, append = TRUE,
+                  row.names = FALSE)
+
+DBI::dbExecute(con,
+  "DELETE FROM taxon_profile WHERE sample_id LIKE 'SAMP_geng2024_%'")
+DBI::dbWriteTable(con, "taxon_profile", df_taxon_profile, append = TRUE,
+                  row.names = FALSE)
+
+df_check <- tibble::tibble(
+  metric = c(
+    "sample (total)", "sample (geng2024_*)", "sample (yahara2021)",
+    "taxon_profile (total)", "taxon_profile (bacterium)",
+    "taxon_profile (virus)"
+  ),
+  rows = c(
+    DBI::dbGetQuery(con, "SELECT COUNT(*) AS n FROM sample")$n,
+    DBI::dbGetQuery(con, "SELECT COUNT(*) AS n FROM sample WHERE source_id LIKE 'geng2024_%'")$n,
+    DBI::dbGetQuery(con, "SELECT COUNT(*) AS n FROM sample WHERE source_id = 'yahara2021'")$n,
+    DBI::dbGetQuery(con, "SELECT COUNT(*) AS n FROM taxon_profile")$n,
+    DBI::dbGetQuery(con, "SELECT COUNT(*) AS n FROM taxon_profile WHERE taxon_kind = 'bacterium'")$n,
+    DBI::dbGetQuery(con, "SELECT COUNT(*) AS n FROM taxon_profile WHERE taxon_kind = 'virus'")$n
+  )
+)
+close_db(con)
+knitr::kable(df_check, caption = "Contract tables after 040 write")
+```
+
+## Persist artefacts
+
+```{r}
+#| label: persist
+write_csv(df_sample, path_target("sample.csv"))
+write_csv(head(df_taxon_profile, 200), path_target("taxon_profile_head200.csv"))
 ```
 
 ## Files written
-
-These files have been written to the target directory, `r paste0("data/", params$name)`:
 
 ```{r}
 #| label: list-files-target

@@ -3,9 +3,33 @@ title: "090-m2a-mapping"
 date: today
 params:
   name: "090-m2a-mapping"
+bibliography: references.bib
 ---
 
 **Updated: `r format(Sys.time(), '%Y-%m-%d %H:%M:%S', tz = 'CET')` CET.**
+
+Joins `candidate_microbe` (M1a output) with `phage_host_link` (M2a output)
+to surface the phages whose predicted hosts overlap with periodontitis
+candidates. The MVP uses two join strategies:
+
+1. **Strict** — `candidate_microbe.taxon_id == phage_host_link.host_taxon_id`.
+   Likely zero hits in this MVP because Geng's bacteriome is at species
+   level (e.g. `STR_Streptococcus_salivarius`) while Yahara's CAT
+   predictions are at genus level (e.g. `STR_Streptococcus`).
+2. **Genus prefix** — candidate species belongs to the predicted host
+   genus (`candidate.taxon_id LIKE host_taxon_id || '_%'`). This is the
+   primary mapping for MVP downstream use.
+
+`100-knowledge-integration` consumes the genus-prefix mapping to assemble
+`evidence_packet`. This module's outputs are exploratory artefacts (CSVs +
+plots), not contract-layer writes.
+
+**Ripple ladder**:
+
+- `090-r1`: replace genus prefix with eHOMD-aware fuzzy taxonomy (handle
+  synonyms, basonyms, misspellings, Candidatus naming).
+- `090-r2`: bipartite-graph visualizations (heatmap, network); centrality
+  metrics; partitioning of phage–host modules.
 
 ```{r}
 #| label: params
@@ -24,18 +48,10 @@ wd <- "analyses"
 if (basename(getwd()) != wd) {
     setwd(here::here(wd))
 }
-here::i_am(paste0(params$name, ".qmd"), uuid = "66e4cefa-a12f-4395-bcce-5bef1dae6add")
+here::i_am(paste0(params$name, ".qmd"), uuid = "75d27a42-be91-466a-a4ed-1f4c2ddf9e30")
 qproj::proj_create_dir_target(params$name, clean = FALSE)
 
-# convenience helpers
 path_target <- qproj::proj_path_target(params$name)
-path_source <- qproj::proj_path_source(params$name)
-path_raw <- path_source("00-raw")
-path_resource <- here::here(path_raw, "d00-resource")
-path_data <- here::here(path_raw, paste0("d", params$name))
-dir.create(path_raw, recursive = TRUE, showWarnings = FALSE)
-dir.create(path_data, recursive = TRUE, showWarnings = FALSE)
-dir.create(path_resource, recursive = TRUE, showWarnings = FALSE)
 ```
 
 ```{r}
@@ -47,11 +63,9 @@ suppressPackageStartupMessages({
   library(here)
   library(conflicted)
   library(tidyverse)
-  library(data.table)
+  library(DBI)
   devtools::load_all()
 })
-# Resolve common dplyr / data.table / stats name clashes up front.
-# Add more `conflicts_prefer()` calls below as needed.
 conflicted::conflicts_prefer(
   dplyr::filter,
   dplyr::lag,
@@ -62,30 +76,105 @@ conflicted::conflicts_prefer(
 )
 ```
 
-## Tasks
-
-This section is designated for your workflow implementation. **Please write all your analysis and processing code here.**
-
-Maintaining your code within this section ensures a clean project structure and facilitates reproducibility. We recommend organizing your workflow into modular tasks—such as data cleaning, analysis, and visualization—using distinct code chunks.
-
-::: {.callout-note}
-## Example structure
-
-This is an example structure to get you started. You can modify it as per your needs.
-:::
-
-### Task 1: Data import
+## Pull contract tables
 
 ```{r}
-#| label: data-import
-#| cache: true
+#| label: pull
+con <- load_db()
+df_candidate <- read_table_db(con, "candidate_microbe")
+df_link      <- read_table_db(con, "phage_host_link")
+close_db(con)
+cat("candidate_microbe:", nrow(df_candidate),
+    " | phage_host_link:", nrow(df_link), "\n")
+```
 
-# Your data import code here
+## Strategy 1: strict equality
+
+```{r}
+#| label: strict
+df_strict <- df_candidate |>
+  dplyr::inner_join(df_link, by = c("taxon_id" = "host_taxon_id")) |>
+  dplyr::select(candidate_id, taxon_id, taxon_name, phenotype, direction,
+                effect_size, q_value,
+                link_id, vOTU_id, evidence_kind, confidence)
+cat("Strict-equality hits:", nrow(df_strict), "\n")
+```
+
+## Strategy 2: genus-prefix join (MVP primary)
+
+```{r}
+#| label: prefix
+df_prefix <- df_candidate |>
+  dplyr::inner_join(df_link,
+                    by = character(),  # cross join
+                    relationship = "many-to-many") |>
+  dplyr::filter(stringr::str_starts(taxon_id,
+                                    paste0(host_taxon_id, "_"))) |>
+  dplyr::select(candidate_id, taxon_id, taxon_name, phenotype, direction,
+                effect_size, q_value,
+                link_id, vOTU_id, host_taxon_id, evidence_kind, confidence)
+cat("Genus-prefix hits:",
+    nrow(df_prefix),
+    " | unique candidates with phage hits:",
+    dplyr::n_distinct(df_prefix$candidate_id),
+    " | unique phages:",
+    dplyr::n_distinct(df_prefix$vOTU_id), "\n")
+```
+
+## Per-genus summary
+
+```{r}
+#| label: per-genus
+df_genus_summary <- df_prefix |>
+  dplyr::group_by(host_taxon_id) |>
+  dplyr::summarise(
+    n_candidates = dplyr::n_distinct(candidate_id),
+    n_phages     = dplyr::n_distinct(vOTU_id),
+    direction_breakdown = paste(
+      paste0(unique(direction), "(",
+             vapply(unique(direction), function(d) dplyr::n_distinct(candidate_id[direction == d]), integer(1)),
+             ")"),
+      collapse = ", "
+    ),
+    mean_confidence = mean(confidence, na.rm = TRUE),
+    .groups = "drop"
+  ) |>
+  dplyr::arrange(dplyr::desc(n_candidates), dplyr::desc(n_phages))
+knitr::kable(df_genus_summary, caption = "Phage–host genus mapping summary")
+```
+
+## Persist mapping artefacts
+
+```{r}
+#| label: persist
+write_csv(df_strict, path_target("mapping_strict.csv"))
+write_csv(df_prefix, path_target("mapping_prefix.csv"))
+write_csv(df_genus_summary, path_target("mapping_genus_summary.csv"))
+```
+
+## Quick visualization
+
+```{r}
+#| label: fig-mapping-genus
+#| fig-width: 7
+#| fig-height: 4
+df_plot <- df_genus_summary |>
+  dplyr::slice_max(n_phages, n = 12) |>
+  dplyr::mutate(host = sub("^STR_", "", host_taxon_id))
+p <- ggplot(df_plot,
+            aes(x = reorder(host, n_phages), y = n_phages)) +
+  geom_col(aes(fill = n_candidates)) +
+  coord_flip() +
+  scale_fill_viridis_c(name = "Candidate species") +
+  labs(x = NULL, y = "Phages predicted to infect this genus",
+       title = "M2a phage hits per M1a-implicated host genus") +
+  theme_minimal(base_size = 11)
+ggsave(path_target("fig_genus_mapping.png"),
+       p, width = 7, height = 4, dpi = 150)
+print(p)
 ```
 
 ## Files written
-
-These files have been written to the target directory, `r paste0("data/", params$name)`:
 
 ```{r}
 #| label: list-files-target

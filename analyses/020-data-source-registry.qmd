@@ -3,9 +3,28 @@ title: "020-data-source-registry"
 date: today
 params:
   name: "020-data-source-registry"
+bibliography: references.bib
 ---
 
 **Updated: `r format(Sys.time(), '%Y-%m-%d %H:%M:%S', tz = 'CET')` CET.**
+
+Registers the public data sources backing the pipeline. Each source is one
+row in `data_source`. Raw supplementary tables live under
+`data/00-raw/d020-data-source-registry/<source-key>/`.
+
+**Ripple-1 scope** (`020-r1`) — seven sources: all six Geng et al. modeling
+bacteriome cohorts plus the Yahara virome.
+
+- `geng2024_<bioproject>` (×6) — periodontitis bacteriome cohorts from the
+  Geng et al. 2024 meta-analysis [@2024-Universal_Geng]; cohort-level facts
+  (n.case / n.control, country, instrument) are pulled from sheet `Table S1`
+  of the supplementary table.
+- `yahara2021` — long-read oral phageome from PromethION saliva sequencing
+  [@2021-Longread_Yahara]. 4 saliva samples (one healthy donor, four
+  conditions). VIRSorter-derived phage contigs.
+
+Ripple-2 (`020-r2`) will pair each Geng cohort with a body-site- and
+disease-matched virome dataset.
 
 ```{r}
 #| label: params
@@ -27,7 +46,6 @@ if (basename(getwd()) != wd) {
 here::i_am(paste0(params$name, ".qmd"), uuid = "fa33ff54-384c-4e3f-be14-cf6aa3347ecb")
 qproj::proj_create_dir_target(params$name, clean = FALSE)
 
-# convenience helpers
 path_target <- qproj::proj_path_target(params$name)
 path_source <- qproj::proj_path_source(params$name)
 path_raw <- path_source("00-raw")
@@ -47,11 +65,11 @@ suppressPackageStartupMessages({
   library(here)
   library(conflicted)
   library(tidyverse)
-  library(data.table)
+  library(readxl)
+  library(jsonlite)
+  library(DBI)
   devtools::load_all()
 })
-# Resolve common dplyr / data.table / stats name clashes up front.
-# Add more `conflicts_prefer()` calls below as needed.
 conflicted::conflicts_prefer(
   dplyr::filter,
   dplyr::lag,
@@ -62,25 +80,97 @@ conflicted::conflicts_prefer(
 )
 ```
 
-## Tasks
+## Verify raw inputs are present
 
-This section is designated for your workflow implementation. **Please write all your analysis and processing code here.**
-
-Maintaining your code within this section ensures a clean project structure and facilitates reproducibility. We recommend organizing your workflow into modular tasks—such as data cleaning, analysis, and visualization—using distinct code chunks.
-
-::: {.callout-note}
-## Example structure
-
-This is an example structure to get you started. You can modify it as per your needs.
-:::
-
-### Task 1: Data import
+The supplementary tables were fetched into
+`data/00-raw/d020-data-source-registry/`. The render fails fast if anything
+is missing.
 
 ```{r}
-#| label: data-import
-#| cache: true
+#| label: verify-raw
+path_geng_repo <- here::here(path_data, "wei2024-imeta-repo")
+path_geng_supp <- here::here(path_geng_repo, "Supplementary table",
+                             "Supplementary Table.xlsx")
+path_geng_rdata <- here::here(path_geng_repo, "Rdata", "Figure 01.Rdata")
+path_yahara_dir <- here::here(path_data, "yahara2021")
+path_yahara_supp4 <- here::here(path_yahara_dir, "MOESM7.xlsx")  # Supp Data 4 = viral seqs
+path_yahara_supp5 <- here::here(path_yahara_dir, "MOESM8.xlsx")  # Supp Data 5 = Strep phages
 
-# Your data import code here
+stopifnot(
+  file.exists(path_geng_supp),
+  file.exists(path_geng_rdata),
+  file.exists(path_yahara_supp4),
+  file.exists(path_yahara_supp5)
+)
+
+df_inputs <- tibble::tibble(
+  source = c("geng2024", "geng2024", "yahara2021", "yahara2021"),
+  file   = c(basename(path_geng_supp), basename(path_geng_rdata),
+             basename(path_yahara_supp4), basename(path_yahara_supp5)),
+  bytes  = c(file.size(path_geng_supp), file.size(path_geng_rdata),
+             file.size(path_yahara_supp4), file.size(path_yahara_supp5))
+)
+knitr::kable(df_inputs, caption = "Raw supplementary inputs (verified present)")
+```
+
+## Build the registry rows
+
+The Geng cohorts are read from `Table S1` of the supplementary spreadsheet.
+We keep only the six modeling cohorts (the two validation cohorts are not
+shipped in the `Figure 01.Rdata` feat_list and are out of ripple-1 scope).
+
+```{r}
+#| label: build-geng-rows
+df_table_s1 <- readxl::read_excel(path_geng_supp, sheet = "Table S1") |>
+  dplyr::filter(`modeling or validation` == "modeling")
+
+geng_table_url <- "https://github.com/whchenlab/Oral-Microbiome-Based-Signature-for-Periodontitis"
+
+df_geng <- df_table_s1 |>
+  dplyr::transmute(
+    source_id        = paste0("geng2024_", project_id),
+    citation_key     = "2024-Universal_Geng",
+    doi              = "10.1002/imt2.212",
+    source_kind      = "bacteriome",
+    n_samples        = as.integer(num.case + num.control),
+    table_url        = geng_table_url,
+    notes            = sprintf(
+      "Ripple-1 M1a; %s saliva/oral cohort %s. %d case / %d control. %s.",
+      country_fullname, project_id, num.case, num.control, instrument_model
+    )
+  )
+
+df_yahara <- tibble::tibble(
+  source_id    = "yahara2021",
+  citation_key = "2021-Longread_Yahara",
+  doi          = "10.1038/s41467-020-20199-9",
+  source_kind  = "virome",
+  n_samples    = 4L,
+  table_url    = "https://www.nature.com/articles/s41467-020-20199-9#Sec19",
+  notes        = "MVP M2a; long-read PromethION saliva phageome. 1 healthy donor x 4 conditions. VIRSorter-derived contigs."
+)
+
+df_sources <- dplyr::bind_rows(df_geng, df_yahara)
+df_sources
+```
+
+## Write to the contract layer
+
+```{r}
+#| label: write-db
+con <- load_db()
+assert_schema(con)
+write_table_db(con, "data_source", df_sources, append = FALSE)
+df_after <- read_table_db(con, "data_source")
+close_db(con)
+knitr::kable(df_after, caption = "data_source after registry write")
+```
+
+## Persist the registry table for human reference
+
+```{r}
+#| label: persist
+write_csv(df_sources, path_target("data_source.csv"))
 ```
 
 ## Files written
