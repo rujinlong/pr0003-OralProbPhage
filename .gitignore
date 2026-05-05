@@ -1,7 +1,6 @@
 # Quarto output
 *.html
 *.pdf
-*.md
 !*.qmd
 !README.md
 *_files/
