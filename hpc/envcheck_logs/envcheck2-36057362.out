@@ -1,0 +1,26 @@
+=== node: cpusrv32.scidom.de ===
+=== shell ===
+BASH_VERSION=5.1.8(1)-release
+SHELL=zsh
+=== PATH ===
+/usr/local/sbin:/usr/local/bin:/home/viro/jinlong.ru/vpipe/bin:/home/viro/jinlong.ru/.local/bin:/home/viro/jinlong.ru/bin:/usr/bin:/usr/sbin:/ictstr01/home/viro/jinlong.ru/.fzf/bin
+=== sourcing vpipe (real bash script) ===
+Number of threads: 1
+Memory per node: 1024 MB
+DB_BIOBAKERY=<unset>
+DB_VIRSORTER2=<unset>
+COMMAND_PREFIX_FLYE=<unset>
+=== conda activate humann4 ===
+/usr/bin/which: no prefetch in (/ictstr01/project_copy/genomics/jru/conda/envs/humann4/bin:/ictstr01/project_copy/genomics/jru/conda/condabin:/usr/local/sbin:/usr/local/bin:/home/viro/jinlong.ru/vpipe/bin:/home/viro/jinlong.ru/.local/bin:/home/viro/jinlong.ru/bin:/usr/bin:/usr/sbin:/ictstr01/home/viro/jinlong.ru/.fzf/bin)
+/usr/bin/which: no fasterq-dump in (/ictstr01/project_copy/genomics/jru/conda/envs/humann4/bin:/ictstr01/project_copy/genomics/jru/conda/condabin:/usr/local/sbin:/usr/local/bin:/home/viro/jinlong.ru/vpipe/bin:/home/viro/jinlong.ru/.local/bin:/home/viro/jinlong.ru/bin:/usr/bin:/usr/sbin:/ictstr01/home/viro/jinlong.ru/.fzf/bin)
+/ictstr01/project_copy/genomics/jru/conda/envs/humann4/bin/metaphlan
+/ictstr01/project_copy/genomics/jru/conda/envs/humann4/bin/merge_metaphlan_tables.py
+=== sra-tools apptainer image ===
+sra-tools image OK
+This sra toolkit installation has not been configured.
+Before continuing, please run: vdb-config --interactive
+This sra toolkit installation has not been configured.
+Before continuing, please run: vdb-config --interactive
+=== check we can write to /ictstr01/scratch/users/jinlong.ru ===
+ictstr01 scratch writable
+=== done ===

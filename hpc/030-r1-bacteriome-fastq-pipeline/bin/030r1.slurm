@@ -47,6 +47,19 @@ ACCESSIONS="${BUNDLE_DIR}/data/geng2024_sra_accessions.tsv"
 OUTDIR="${OUTDIR:-${BUNDLE_DIR}/results}"
 mkdir -p "$OUTDIR"
 
+# --- compute-node env setup ----------------------------------------------------
+# This HPC has no system-wide metaphlan/sra-tools. We activate the humann4 conda
+# env (provides: metaphlan, merge_metaphlan_tables.py, Rscript+packages, python3
+# w/ yaml) and wrap prefetch/fasterq-dump via apptainer + a project-local NCBI
+# settings file (sra-tools 2.11 ships unconfigured).
+if ! command -v metaphlan >/dev/null 2>&1; then
+  source "${HOME}/miniconda3/etc/profile.d/conda.sh"
+  conda activate humann4
+fi
+SRA_IMG="${SRA_IMG:-/ictstr01/project/genomics/jru/singularity/depot.galaxyproject.org-singularity-sra-tools-2.11.0--pl5321ha49a11a_3.img}"
+NCBI_CFG="${NCBI_CFG:-${BUNDLE_DIR}/../../oralprob/.ncbi/user-settings.mkfg}"
+SRA_RUN="apptainer exec -B /ictstr01 -B /localscratch -B /tmp --env VDB_CONFIG=${NCBI_CFG} ${SRA_IMG}"
+
 case "$SUBCMD" in
   download)
     RUN_ID=${2:?"missing RUN_ID"}
@@ -61,9 +74,9 @@ case "$SUBCMD" in
     fi
 
     log_info "Prefetching $RUN_ID"
-    prefetch --max-size 200g --output-directory . "$RUN_ID"
+    $SRA_RUN prefetch --max-size 200g --output-directory . "$RUN_ID"
     log_info "fasterq-dump $RUN_ID"
-    fasterq-dump --threads "$SLURM_CPUS_PER_TASK" --split-files --skip-technical \
+    $SRA_RUN fasterq-dump --threads "$SLURM_CPUS_PER_TASK" --split-files --skip-technical \
                  --temp ./tmp "./${RUN_ID}/${RUN_ID}.sra"
     rm -rf "$RUN_ID" ./tmp
     for f in "${RUN_ID}"*.fastq; do

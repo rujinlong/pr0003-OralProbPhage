@@ -1,0 +1,48 @@
+=== node cpusrv32.scidom.de ===
+=== python3 yaml on compute ===
+/usr/bin/python3
+Python 3.9.21
+yaml OK 5.4.1
+=== run yaml_to_env directly on compute ===
+export DBPATH="/home/viro/jinlong.ru/data2/db"
+export DB_VPF="/home/viro/jinlong.ru/data2/db/viroprofiler"
+export DB_PROSTT5="/home/viro/jinlong.ru/data2/db/prostt5/weights"
+export DB_PHAROKKA="/home/viro/jinlong.ru/data2/db/pharokka/current"
+export DB_PHOLD="/home/viro/jinlong.ru/data2/db/phold/current"
+export DB_PHYNTENY="/home/viro/jinlong.ru/data2/db/phynteny/current/models"
+export DB_GENOMAD="/home/viro/jinlong.ru/data2/db/genomad/genomad_db"
+export DB_VIBRANT="/home/viro/jinlong.ru/data2/db/viroprofiler/vibrant"
+export DB_PHISPY="/home/viro/jinlong.ru/data2/db/phispy/pVOGs.hmm"
+export DB_TYPPING="/home/viro/jinlong.ru/data2/db/typping"
+export DB_BAKTA="/home/viro/jinlong.ru/data2/db/bakta/db"
+export DB_DRAM="/home/viro/jinlong.ru/data2/db/dram/current"
+export DB_METABOLIC="/home/viro/jinlong.ru/data2/db/metabolic/METABOLIC"
+export DB_REFSEQ_BAC_MASH="/home/viro/jinlong.ru/data2/db/ncbi/refseq"
+export DB_GENOMES="/home/viro/jinlong.ru/data2/db/ncbi/genomes"
+export DB_INPHARED="/home/viro/jinlong.ru/data2/db/inphared/20240710/genome_blast_db/inphared"
+export DB_CHECKV="/home/viro/jinlong.ru/data2/db/viroprofiler/checkv"
+export DB_PHABLES="/home/viro/jinlong.ru/data2/db/phables"
+export DB_VIRSORTER2="/home/viro/jinlong.ru/data2/db/viroprofiler/virsorter2"
+export DB_CHECKM2="/home/viro/jinlong.ru/data2/db/checkm2/current/CheckM2_database/uniref100.KO.1.dmnd"
+=== with PYTHONPATH inspection ===
+
+/usr/lib64/python39.zip
+/usr/lib64/python3.9
+/usr/lib64/python3.9/lib-dynload
+/usr/lib64/python3.9/site-packages
+/usr/lib/python3.9/site-packages
+=== source vpipe with full stderr captured ===
+--- stdout ---
+Number of threads: 1
+Memory per node: 1024 MB
+--- stderr ---
+=== now actually re-source and check vars ===
+Number of threads: 1
+Memory per node: 1024 MB
+DBPATH=/home/viro/jinlong.ru/data2/db
+DB_BIOBAKERY=/home/viro/jinlong.ru/data2/db/biobakery
+COMMAND_PREFIX_FLYE=apptainer exec -B /ictstr01/home/viro/jinlong.ru -B /ictstr01/project_copy/genomics/jru/project/pr0003-OralProbPhage -B /ictstr01/project/genomics -B /ictstr01/project_copy/genomics -B /localscratch -B /home/viro/jinlong.ru/data2/db/viroprofiler:/opt/conda/db2 /ictstr01/project/genomics/jru/singularity/flye.sif
+=== _VPIPE_CONF_DIR ===
+_VPIPE_CONF_DIR=/home/viro/jinlong.ru/vpipe/conf
+/home/viro/jinlong.ru/vpipe/conf/database.yml
+=== done ===
