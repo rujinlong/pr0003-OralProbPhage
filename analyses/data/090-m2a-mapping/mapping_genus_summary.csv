@@ -1,0 +1,35 @@
+host_taxon_id,n_candidates,n_phages,direction_breakdown,mean_confidence
+STR_Prevotella,72,41,"disease_enriched(50), health_enriched(22)",0.8482926829268292
+STR_Actinomyces,43,6,"health_enriched(32), disease_enriched(11)",0.7216666666666667
+STR_Streptococcus,35,251,"health_enriched(25), disease_enriched(10)",0.709003984063745
+STR_Treponema,33,1,"disease_enriched(31), health_enriched(2)",0.93
+STR_Selenomonas,27,27,"disease_enriched(16), health_enriched(11)",0.6822222222222222
+STR_Capnocytophaga,24,24,"health_enriched(8), disease_enriched(16)",0.8095833333333333
+STR_Leptotrichia,20,65,"health_enriched(6), disease_enriched(14)",0.8761538461538462
+STR_Campylobacter,17,10,"disease_enriched(11), health_enriched(6)",0.944
+STR_Porphyromonas,15,2,"disease_enriched(11), health_enriched(4)",0.59
+STR_Neisseria,13,14,"health_enriched(9), disease_enriched(4)",0.6921428571428572
+STR_Veillonella,12,81,"health_enriched(8), disease_enriched(4)",0.9018518518518518
+STR_Haemophilus,12,4,health_enriched(12),0.5925
+STR_Tannerella,10,11,disease_enriched(10),0.899090909090909
+STR_Oribacterium,10,10,"health_enriched(8), disease_enriched(2)",0.784
+STR_Corynebacterium,9,2,"health_enriched(7), disease_enriched(2)",0.74
+STR_Aggregatibacter,8,1,"disease_enriched(6), health_enriched(2)",0.51
+STR_Alloprevotella,8,1,"health_enriched(3), disease_enriched(5)",0.64
+STR_Rothia,8,1,health_enriched(8),0.92
+STR_Fusobacterium,6,34,"disease_enriched(4), health_enriched(2)",0.8488235294117648
+STR_Gemella,6,6,"health_enriched(4), disease_enriched(2)",0.575
+STR_Candidatus_Gracilibacteria_bacterium,6,1,"health_enriched(4), disease_enriched(2)",0.64
+STR_Mogibacterium,5,14,"disease_enriched(3), health_enriched(2)",0.8785714285714286
+STR_Peptostreptococcus,5,11,"disease_enriched(3), health_enriched(2)",0.8409090909090909
+STR_Granulicatella,4,7,"health_enriched(3), disease_enriched(1)",0.6085714285714285
+STR_Streptococcus_sp,4,6,health_enriched(4),0.6516666666666666
+STR_Lachnospiraceae_bacterium,4,4,"health_enriched(2), disease_enriched(2)",0.58
+STR_Abiotrophia,4,1,health_enriched(4),0.51
+STR_Bifidobacterium,4,1,disease_enriched(4),0.81
+STR_Cardiobacterium,4,1,"health_enriched(3), disease_enriched(1)",0.92
+STR_Alloprevotella_sp,2,3,"health_enriched(1), disease_enriched(1)",0.8766666666666667
+STR_Megasphaera,2,3,health_enriched(2),0.8366666666666667
+STR_Alloscardovia,2,2,disease_enriched(2),0.745
+STR_Slackia,2,2,disease_enriched(2),0.86
+STR_Porphyromonas_sp,2,1,disease_enriched(2),0.54

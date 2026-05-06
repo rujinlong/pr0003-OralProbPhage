@@ -1,0 +1,6 @@
+taxon_name,vOTU_id,integrase,confidence,effect_size,direction,match_level,compatibility_score
+Actinomyces_bouchesdurhonensis,vOTU_yahara2021_00913,yes,0.65,-5.190884323603913,health_enriched,genus,0.17965971451561621
+Actinomyces_massiliensis,vOTU_yahara2021_00913,yes,0.65,-4.559556245551809,health_enriched,genus,0.18525179792729826
+Actinomyces_massiliensis,vOTU_yahara2021_00913,yes,0.65,-4.106685014503884,health_enriched,genus,0.1911006869459774
+Actinomyces_naeslundii,vOTU_yahara2021_00913,yes,0.65,-4.00248471230953,health_enriched,genus,0.19246029755870495
+Actinomyces_SGB17168,vOTU_yahara2021_00913,yes,0.65,-3.586013852343329,health_enriched,genus,0.19794477392853407

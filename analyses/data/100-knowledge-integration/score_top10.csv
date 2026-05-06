@@ -1,0 +1,11 @@
+taxon_name,vOTU_id,integrase,confidence,effect_size,direction,match_level,compatibility_score
+Leptotrichia_hofstadii,vOTU_yahara2021_01334,NA,1,24.49897717128965,disease_enriched,species,0.9525741268224334
+Leptotrichia_hofstadii,vOTU_yahara2021_01688,NA,1,24.49897717128965,disease_enriched,species,0.9525741268224334
+Prevotella_denticola,vOTU_yahara2021_01160,NA,1,28.36249449427528,disease_enriched,species,0.9525741268224334
+Prevotella_baroniae,vOTU_yahara2021_01160,NA,1,25.125621910405165,disease_enriched,species,0.9525741268224334
+Prevotella_sp_oral_taxon_473,vOTU_yahara2021_01160,NA,1,21.88389135932637,disease_enriched,species,0.9525741268224334
+Prevotella_dentalis,vOTU_yahara2021_01160,NA,1,24.296969758845936,disease_enriched,species,0.9525741268224334
+Prevotella_dentalis,vOTU_yahara2021_01160,NA,1,5.257493053223866,disease_enriched,species,0.9525741268224334
+Prevotella_intermedia,vOTU_yahara2021_01160,NA,1,5.4016512046051774,disease_enriched,species,0.9525741268224334
+Prevotella_koreensis,vOTU_yahara2021_01160,NA,1,6.13059548719353,disease_enriched,species,0.9525741268224334
+Prevotella_multiformis,vOTU_yahara2021_01160,NA,1,6.565454820211485,disease_enriched,species,0.9525741268224334

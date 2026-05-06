@@ -1,0 +1,66 @@
+schema_version: '0.2'
+tables:
+  data_source:
+    pk: source_id
+    columns:
+      source_id: TEXT
+      citation_key: TEXT
+      doi: TEXT
+      source_kind: TEXT
+      n_samples: INTEGER
+      table_url: TEXT
+      notes: TEXT
+  sample:
+    pk: sample_id
+    columns:
+      sample_id: TEXT
+      source_id: TEXT
+      subject_id: TEXT
+      disease_status: TEXT
+      body_site: TEXT
+      seq_type: TEXT
+      meta_json: TEXT
+  taxon_profile:
+    pk: profile_id
+    columns:
+      profile_id: TEXT
+      sample_id: TEXT
+      taxon_id: TEXT
+      taxon_kind: TEXT
+      taxon_name: TEXT
+      abundance: REAL
+      abundance_kind: TEXT
+  candidate_microbe:
+    pk: candidate_id
+    columns:
+      candidate_id: TEXT
+      taxon_id: TEXT
+      taxon_name: TEXT
+      phenotype: TEXT
+      direction: TEXT
+      effect_size: REAL
+      p_value: REAL
+      q_value: REAL
+      n_cohorts: INTEGER
+      method: TEXT
+      schema_version: TEXT
+  phage_host_link:
+    pk: link_id
+    columns:
+      link_id: TEXT
+      vOTU_id: TEXT
+      host_taxon_id: TEXT
+      evidence_kind: TEXT
+      confidence: REAL
+      support_json: TEXT
+      schema_version: TEXT
+  evidence_packet:
+    pk: packet_id
+    columns:
+      packet_id: TEXT
+      candidate_id: TEXT
+      link_id: TEXT
+      compatibility_score: REAL
+      summary_text: TEXT
+      generated_at: TEXT
+      support_json: TEXT

@@ -21,7 +21,7 @@
 .DS_Store
 
 # Data (qproj auto-generated output area)
-analyses/data/*
+#analyses/data/*
 !analyses/data/README.md
 analyses/*_cache
 

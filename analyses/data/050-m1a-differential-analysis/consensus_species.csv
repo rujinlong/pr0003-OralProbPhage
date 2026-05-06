@@ -1,0 +1,13 @@
+taxon_id,taxon_name,n_methods,n_dir_disease,n_dir_health,effect_size,q_value,methods_flagging,direction,p_value
+STR_Actinomyces_massiliensis,Actinomyces_massiliensis,2,0,2,-3.5472422463104096,0.09547694536415487,"deseq2,maaslin2",health_enriched,NA
+STR_Actinomyces_naeslundii,Actinomyces_naeslundii,3,0,3,-2.68467479963295,0.09728786691536086,"ancombc,maaslin2,wilcoxon",health_enriched,NA
+STR_Corynebacterium_durum,Corynebacterium_durum,3,0,3,-3.2109213142986976,0.054717718522451296,"ancombc,maaslin2,wilcoxon",health_enriched,NA
+STR_Eubacterium_nodatum,Eubacterium_nodatum,3,3,0,3.8943709546340215,0.053545459455426075,"ancombc,maaslin2,wilcoxon",disease_enriched,NA
+STR_Filifactor_alocis,Filifactor_alocis,3,3,0,3.6201226431006965,0.09728786691536086,"ancombc,maaslin2,wilcoxon",disease_enriched,NA
+STR_Fretibacterium_fastidiosum,Fretibacterium_fastidiosum,4,4,0,4.763314927490619,0.09728786691536086,"ancombc,deseq2,maaslin2,wilcoxon",disease_enriched,NA
+STR_GGB10852_SGB17523,GGB10852_SGB17523,3,3,0,3.3686145865600916,0.053545459455426075,"ancombc,maaslin2,wilcoxon",disease_enriched,NA
+STR_GGB4333_SGB5935,GGB4333_SGB5935,2,2,0,16.477126511155888,0.0658746833505376,"ancombc,deseq2",disease_enriched,NA
+STR_Lautropia_mirabilis,Lautropia_mirabilis,3,0,3,-3.0159028275761046,0.08486355915155792,"ancombc,maaslin2,wilcoxon",health_enriched,NA
+STR_Porphyromonas_endodontalis,Porphyromonas_endodontalis,3,3,0,3.6909367283354326,0.08610578129096126,"ancombc,maaslin2,wilcoxon",disease_enriched,NA
+STR_Tannerella_forsythia,Tannerella_forsythia,3,3,0,3.095480469969676,0.09728786691536086,"ancombc,maaslin2,wilcoxon",disease_enriched,NA
+STR_Treponema_maltophilum,Treponema_maltophilum,3,3,0,3.395809880352176,0.08486355915155792,"ancombc,maaslin2,wilcoxon",disease_enriched,NA
