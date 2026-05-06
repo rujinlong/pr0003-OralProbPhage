@@ -21,7 +21,13 @@ fi
 source "${VPIPEBIN}/00-config.sh"
 source "${VPIPEBIN}/01-functions.sh"
 
-BUNDLE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# When sbatch'ed, the script is copied to /var/spool/slurmd/... so BASH_SOURCE
+# points there. Prefer SLURM_SUBMIT_DIR (the dir from which sbatch was run).
+if [ -n "${SLURM_SUBMIT_DIR:-}" ] && [ -d "${SLURM_SUBMIT_DIR}/bin" ]; then
+  BUNDLE_DIR="$SLURM_SUBMIT_DIR"
+else
+  BUNDLE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+fi
 TSV="${TSV:-${BUNDLE_DIR}/data/geng2024_sra_accessions.tsv}"
 SUBCMD=${1:?"first arg must be the bin/030r1.slurm subcommand (download|metaphlan4)"}
 

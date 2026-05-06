@@ -54,6 +54,18 @@ ACCESSIONS="${BUNDLE_DIR}/data/yahara2021_run_accessions.tsv"
 OUTDIR="${OUTDIR:-${BUNDLE_DIR}/results}"
 mkdir -p "$OUTDIR"
 
+# --- compute-node env setup ----------------------------------------------------
+# Activate humann4 conda env for python3+yaml/openpyxl/Rscript+packages used by
+# the validate step; and wrap prefetch/fasterq-dump in the sra-tools apptainer
+# image + project-local NCBI settings file.
+if ! command -v metaphlan >/dev/null 2>&1; then
+  source "${HOME}/miniconda3/etc/profile.d/conda.sh"
+  conda activate humann4
+fi
+SRA_IMG="${SRA_IMG:-/ictstr01/project/genomics/jru/singularity/depot.galaxyproject.org-singularity-sra-tools-2.11.0--pl5321ha49a11a_3.img}"
+NCBI_CFG="${NCBI_CFG:-${BUNDLE_DIR}/../../oralprob/.ncbi/user-settings.mkfg}"
+SRA_RUN="apptainer exec -B /ictstr01 -B /localscratch -B /tmp --env VDB_CONFIG=${NCBI_CFG} ${SRA_IMG}"
+
 # Helper: list runs matching a column value in the accession TSV
 runs_in_condition() {
   local cond=$1 platform=$2
@@ -80,9 +92,9 @@ case "$SUBCMD" in
     fi
 
     log_info "Prefetching $RUN_ID"
-    prefetch --max-size 200g --output-directory . "$RUN_ID"
+    $SRA_RUN prefetch --max-size 200g --output-directory . "$RUN_ID"
     log_info "fasterq-dump $RUN_ID"
-    fasterq-dump --threads "$SLURM_CPUS_PER_TASK" $SPLIT_OPT --skip-technical \
+    $SRA_RUN fasterq-dump --threads "$SLURM_CPUS_PER_TASK" $SPLIT_OPT --skip-technical \
                  --temp ./tmp "./${RUN_ID}/${RUN_ID}.sra"
     rm -rf "$RUN_ID" ./tmp
     for f in "${RUN_ID}"*.fastq; do

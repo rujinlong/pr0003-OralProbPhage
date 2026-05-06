@@ -18,7 +18,11 @@ fi
 source "${VPIPEBIN}/00-config.sh"
 source "${VPIPEBIN}/01-functions.sh"
 
-BUNDLE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+if [ -n "${SLURM_SUBMIT_DIR:-}" ] && [ -d "${SLURM_SUBMIT_DIR}/bin" ]; then
+  BUNDLE_DIR="$SLURM_SUBMIT_DIR"
+else
+  BUNDLE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+fi
 TSV="${TSV:-${BUNDLE_DIR}/data/yahara2021_run_accessions.tsv}"
 SUBCMD=${1:?"first arg must be subcommand: download|flye|virsorter2|checkv|coverage"}
 

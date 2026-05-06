@@ -1,0 +1,28 @@
+=== node: cpusrv32.scidom.de ===
+=== PATH ===
+/usr/local/sbin:/usr/local/bin:/home/viro/jinlong.ru/vpipe/bin:/home/viro/jinlong.ru/.local/bin:/home/viro/jinlong.ru/bin:/usr/bin:/usr/sbin:/ictstr01/home/viro/jinlong.ru/.fzf/bin
+=== shell ===
+zsh
+    PID TTY          TIME CMD
+2434229 ?        00:00:00 slurm_script
+=== tools ===
+MISSING: prefetch
+MISSING: fasterq-dump
+MISSING: metaphlan
+MISSING: merge_metaphlan_tables.py
+/usr/bin/pigz
+/usr/bin/Rscript
+/usr/bin/python3
+/usr/bin/apptainer
+=== humann4 envvar ===
+/home/viro/jinlong.ru/miniconda3/envs/humann4/bin/metaphlan
+=== /scratch /localscratch ===
+ls: cannot access '/scratch': No such file or directory
+drwxrwxrwx. 634 root root 36470784 May  5 20:51 /localscratch
+=== ictstr01/scratch/users/jinlong.ru ===
+drwxrwxrwx. 4 jinlong.ru OG-VIRO-User 4096 Jun  1  2025 /ictstr01/scratch/users/jinlong.ru
+=== sourcing vpipe ===
+Number of threads: 1
+Memory per node: 1024 MB
+DB_BIOBAKERY=<unset>
+COMMAND_PREFIX_FLYE=<unset>
